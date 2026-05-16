@@ -2,8 +2,10 @@ import discord
 import asyncio
 import logging
 import os
+import random
 import signal
 import sys
+from datetime import datetime, timezone, timedelta
 from discord.ext import commands
 from dotenv import load_dotenv
 
@@ -19,384 +21,334 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-    ],
+    handlers=[logging.StreamHandler(sys.stdout)],
 )
 log = logging.getLogger("lockdown")
 
-# ── Stats Counter ──────────────────────────────────────────────────────────────
+# ── Stats ──────────────────────────────────────────────────────────────────────
 stats = {
     "deleted":   0,
     "failed":    0,
-    "skipped":   0,   # already-deleted / not-found
-    "unblocked": 0,   # relationships reversed by lockdown
-    "reopened":  0,   # DM channels re-opened after closure
+    "skipped":   0,
+    "unblocked": 0,
+    "reopened":  0,
 }
 
-# ── Bot ────────────────────────────────────────────────────────────────────────
-bot = commands.Bot(command_prefix="\x00", self_bot=True)
+# ── Stealth Config ─────────────────────────────────────────────────────────────
+DELETE_DELAY_MIN = 0.8   # সেকেন্ড — delete এর আগে minimum wait
+DELETE_DELAY_MAX = 3.2   # সেকেন্ড — delete এর আগে maximum wait
+BACKFILL_LIMIT   = 5     # বেশি history scan = বেশি suspicious
+
+# ── Time Schedule (Bangladesh UTC+6) ──────────────────────────────────────────
+BD_TZ        = timezone(timedelta(hours=6))
+ACTIVE_START = 1   # রাত ১টা
+ACTIVE_END   = 10  # সকাল ১০টা
+
+# ── Bot setup — invisible mode ─────────────────────────────────────────────────
+bot = commands.Bot(
+    command_prefix="\x00",
+    self_bot=True,
+    status=discord.Status.invisible,  # ghost — online দেখাবে না
+    activity=None,
+)
 
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
+# ── Stealth Utilities ──────────────────────────────────────────────────────────
+async def human_delay(min_s: float = DELETE_DELAY_MIN, max_s: float = DELETE_DELAY_MAX) -> None:
+    """Random sleep — makes actions look human, not instant/robotic."""
+    await asyncio.sleep(random.uniform(min_s, max_s))
+
+
+def jitter(base: float) -> float:
+    """±30% random jitter on any sleep — avoids fixed-interval fingerprinting."""
+    return base * random.uniform(0.7, 1.3)
+
+
+# ── Message Helper ─────────────────────────────────────────────────────────────
 def describe(message: discord.Message) -> str:
-    """Human-readable summary of a message for logging."""
     parts = []
     if message.content:
-        preview = message.content[:50].replace("\n", " ")
-        parts.append(f'text="{preview}"')
+        parts.append(f'text="{message.content[:50].replace(chr(10), " ")}"')
     if message.attachments:
-        names = [a.filename for a in message.attachments]
-        parts.append(f"attachments={names}")
+        parts.append(f"files={[a.filename for a in message.attachments]}")
     if message.embeds:
         parts.append(f"{len(message.embeds)} embed(s)")
     if message.stickers:
         parts.append(f"{len(message.stickers)} sticker(s)")
-
     ch = getattr(message.channel, "name", None) or f"DM/{message.channel.id}"
-    content_str = ", ".join(parts) if parts else "(no text — attachment/embed only)"
-    return f"ch={ch} | {content_str}"
+    return f"ch={ch} | {', '.join(parts) or '(no text)'}"
 
 
+# ── Core Actions ───────────────────────────────────────────────────────────────
 async def safe_delete(message: discord.Message, source: str = "live") -> None:
-    """
-    Delete a message with retry on rate-limit.
-    source: 'live' | 'backfill' | 'edit'
-    """
-    MAX_RETRIES = 4
+    """Human-delayed delete with 429 retry + jitter."""
+    # source অনুযায়ী delay — backfill সবচেয়ে slow (কম suspicious)
+    delays = {
+        "live":     (DELETE_DELAY_MIN, DELETE_DELAY_MAX),
+        "edit":     (1.0, 4.0),
+        "backfill": (2.0, 8.0),
+    }
+    lo, hi = delays.get(source, (DELETE_DELAY_MIN, DELETE_DELAY_MAX))
+    await human_delay(lo, hi)
 
-    for attempt in range(1, MAX_RETRIES + 1):
+    for attempt in range(1, 5):
         try:
             await message.delete()
             stats["deleted"] += 1
-            log.info(
-                f"[WIPED #{stats['deleted']}] [{source.upper()}] {describe(message)}"
-            )
+            log.info(f"[WIPED #{stats['deleted']}] [{source.upper()}] {describe(message)}")
             return
 
         except discord.HTTPException as e:
-
-            if e.status == 429:  # Rate limited
-                retry_after = getattr(e, "retry_after", None) or (attempt * 2.5)
-                log.warning(
-                    f"[RATE-LIMIT] Attempt {attempt}/{MAX_RETRIES}. "
-                    f"Sleeping {retry_after:.2f}s... | {describe(message)}"
-                )
-                await asyncio.sleep(retry_after)
-
-            elif e.status == 403:  # No permission
+            if e.status == 429:
+                wait = jitter(getattr(e, "retry_after", None) or attempt * 3.0)
+                log.warning(f"[RATE-LIMIT] Attempt {attempt}/4 → sleep {wait:.2f}s")
+                await asyncio.sleep(wait)
+            elif e.status == 403:
                 stats["failed"] += 1
-                log.error(f"[FORBIDDEN] No delete permission | {describe(message)}")
+                log.error(f"[FORBIDDEN] {describe(message)}")
                 return
-
-            elif e.status == 404:  # Already gone
+            elif e.status == 404:
                 stats["skipped"] += 1
-                log.info(f"[ALREADY GONE] Message not found (deleted elsewhere) | {describe(message)}")
+                log.info(f"[GONE] {describe(message)}")
                 return
-
             else:
                 stats["failed"] += 1
-                log.error(f"[HTTP {e.status}] {e.text} | {describe(message)}")
+                log.error(f"[HTTP {e.status}] {e.text}")
                 return
-
         except discord.NotFound:
             stats["skipped"] += 1
-            log.info(f"[ALREADY GONE] NotFound | {describe(message)}")
             return
-
         except Exception as e:
             stats["failed"] += 1
-            log.exception(f"[UNEXPECTED] {e} | {describe(message)}")
+            log.exception(f"[UNEXPECTED] {e}")
             return
 
     stats["failed"] += 1
-    log.error(f"[FAILED] Could not delete after {MAX_RETRIES} attempts | {describe(message)}")
+    log.error(f"[FAILED] 4 attempts exhausted | {describe(message)}")
 
 
 async def safe_unblock(user: discord.User, reason: str) -> None:
-    """
-    Reverse a block/ignore action performed by a compromised account.
-    Handles both RelationshipType.blocked and RelationshipType.incoming_request
-    that a hacker might trigger to hide communication trails.
-    """
-    MAX_RETRIES = 3
+    """Reverse block/ignore with small human delay."""
+    await human_delay(0.5, 1.5)
+    tag = f"{user} ({user.id})"
 
-    user_tag = f"{user} (ID: {user.id})"
-
-    for attempt in range(1, MAX_RETRIES + 1):
+    for attempt in range(1, 4):
         try:
-            # discord.py-self exposes remove_relationship() to undo block/ignore
             await user.remove_relationship()
             stats["unblocked"] += 1
-            log.warning(
-                f"[UNBLOCKED #{stats['unblocked']}] Reversed '{reason}' on {user_tag}"
-            )
+            log.warning(f"[UNBLOCKED #{stats['unblocked']}] '{reason}' reversed → {tag}")
             return
-
         except discord.HTTPException as e:
             if e.status == 429:
-                retry_after = getattr(e, "retry_after", None) or (attempt * 2.5)
-                log.warning(
-                    f"[RATE-LIMIT/UNBLOCK] Attempt {attempt}/{MAX_RETRIES}. "
-                    f"Sleeping {retry_after:.2f}s... | {user_tag}"
-                )
-                await asyncio.sleep(retry_after)
-
+                wait = jitter(getattr(e, "retry_after", None) or attempt * 3.0)
+                await asyncio.sleep(wait)
             elif e.status == 404:
-                # Relationship already gone — that's fine
-                log.info(f"[UNBLOCK SKIP] Relationship already removed for {user_tag}")
-                return
-
+                return  # already removed
             else:
-                log.error(f"[UNBLOCK HTTP {e.status}] {e.text} | {user_tag}")
+                log.error(f"[UNBLOCK HTTP {e.status}] {tag}")
                 return
-
         except Exception as e:
-            log.exception(f"[UNBLOCK UNEXPECTED] {e} | {user_tag}")
+            log.exception(f"[UNBLOCK ERR] {e}")
             return
-
-    log.error(f"[UNBLOCK FAILED] Could not reverse '{reason}' after {MAX_RETRIES} attempts | {user_tag}")
 
 
 async def safe_reopen_dm(user: discord.User) -> None:
-    """
-    Re-open a DM channel that was closed/hidden by a compromised account.
-    Uses create_dm() which is idempotent — safe to call even if DM still exists.
-    """
-    user_tag = f"{user} (ID: {user.id})"
-    MAX_RETRIES = 3
+    """Re-open a closed DM channel."""
+    await human_delay(0.5, 2.0)
+    tag = f"{user} ({user.id})"
 
-    for attempt in range(1, MAX_RETRIES + 1):
+    for attempt in range(1, 4):
         try:
-            channel = await user.create_dm()
+            ch = await user.create_dm()
             stats["reopened"] += 1
-            log.warning(
-                f"[DM REOPENED #{stats['reopened']}] Restored hidden DM with {user_tag} "
-                f"→ channel ID: {channel.id}"
-            )
+            log.warning(f"[DM REOPENED #{stats['reopened']}] {tag} → ch={ch.id}")
             return
-
         except discord.HTTPException as e:
             if e.status == 429:
-                retry_after = getattr(e, "retry_after", None) or (attempt * 2.5)
-                log.warning(
-                    f"[RATE-LIMIT/DM] Attempt {attempt}/{MAX_RETRIES}. "
-                    f"Sleeping {retry_after:.2f}s... | {user_tag}"
-                )
-                await asyncio.sleep(retry_after)
-
+                wait = jitter(getattr(e, "retry_after", None) or attempt * 3.0)
+                await asyncio.sleep(wait)
             else:
-                log.error(f"[DM REOPEN HTTP {e.status}] {e.text} | {user_tag}")
+                log.error(f"[DM REOPEN HTTP {e.status}] {tag}")
                 return
-
         except Exception as e:
-            log.exception(f"[DM REOPEN UNEXPECTED] {e} | {user_tag}")
+            log.exception(f"[DM REOPEN ERR] {e}")
             return
-
-    log.error(f"[DM REOPEN FAILED] Could not re-open DM with {user_tag} after {MAX_RETRIES} attempts")
 
 
 def print_stats() -> None:
     log.info(
-        f"[STATS] Deleted={stats['deleted']} | "
-        f"Failed={stats['failed']} | "
-        f"Skipped={stats['skipped']} | "
-        f"Unblocked={stats['unblocked']} | "
-        f"DMs-Reopened={stats['reopened']}"
+        f"[STATS] Deleted={stats['deleted']} | Failed={stats['failed']} | "
+        f"Skipped={stats['skipped']} | Unblocked={stats['unblocked']} | "
+        f"Reopened={stats['reopened']}"
     )
 
 
 # ── Graceful Shutdown ──────────────────────────────────────────────────────────
 def handle_exit(sig, frame):
-    log.info(f"[SHUTDOWN] Signal {sig} received. Shutting down gracefully...")
+    log.info(f"[SHUTDOWN] Signal {sig}.")
     print_stats()
-    log.info("[SHUTDOWN] Goodbye.")
     sys.exit(0)
 
 signal.signal(signal.SIGINT,  handle_exit)
 signal.signal(signal.SIGTERM, handle_exit)
 
 
-# ── Events ─────────────────────────────────────────────────────────────────────
+# ── Discord Events ─────────────────────────────────────────────────────────────
 @bot.event
 async def on_ready():
     log.info("=" * 60)
-    log.info("   ⚠️  EMERGENCY LOCKDOWN BOT — ACTIVE (v2)")
-    log.info(f"   User     : {bot.user} (ID: {bot.user.id})")
-    log.info(f"   Watching : ALL servers, DMs, Group DMs")
-    log.info(f"   Guards   : message-delete | unblock | dm-reopen")
+    log.info("   ⚠️  LOCKDOWN BOT v3 — STEALTH MODE ACTIVE")
+    log.info(f"   User   : {bot.user} (ID: {bot.user.id})")
+    log.info(f"   Status : invisible | Delay: {DELETE_DELAY_MIN}–{DELETE_DELAY_MAX}s")
+    log.info(f"   Window : 01:00–10:00 BD time")
     log.info("=" * 60)
 
-    # ── Backfill: recent DM messages sent before bot started ──
-    log.info("[BACKFILL] Scanning cached DM/Group channels for recent messages...")
-    backfill_count = 0
-
-    for channel in bot.private_channels:
-        try:
-            async for message in channel.history(limit=20):
-                if message.author.id == bot.user.id:
-                    asyncio.ensure_future(safe_delete(message, source="backfill"))
-                    backfill_count += 1
-        except discord.Forbidden:
-            log.warning(f"[BACKFILL] No access to channel {channel.id}")
-        except Exception as e:
-            log.warning(f"[BACKFILL] Error scanning channel {channel.id}: {e}")
-
-    log.info(f"[BACKFILL] Queued {backfill_count} old message(s) for deletion.")
-
-    # ── Relationship sweep: unblock anyone already blocked at startup ──
-    log.info("[STARTUP] Checking for pre-existing blocks/ignores...")
-    sweep_count = 0
+    # Invisible নিশ্চিত করো connect হওয়ার পর
     try:
-        for relationship in bot.user.relationships:
-            rel_type = relationship.type
+        await bot.change_presence(status=discord.Status.invisible, activity=None)
+    except Exception:
+        pass
 
-            # RelationshipType.blocked  → hacker blocked a victim
-            # RelationshipType.ignored  → hacker silenced a victim (discord.py-self exposes this)
-            if rel_type in (
-                discord.RelationshipType.blocked,
-                discord.RelationshipType.ignored,
-            ):
-                asyncio.ensure_future(
-                    safe_unblock(relationship.user, reason=str(rel_type))
-                )
-                sweep_count += 1
+    # Backfill — ছোট limit
+    count = 0
+    for ch in bot.private_channels:
+        try:
+            async for msg in ch.history(limit=BACKFILL_LIMIT):
+                if msg.author.id == bot.user.id:
+                    asyncio.ensure_future(safe_delete(msg, source="backfill"))
+                    count += 1
+        except Exception:
+            pass
+    log.info(f"[BACKFILL] Queued {count} old message(s).")
+
+    # Block sweep
+    swept = 0
+    try:
+        for rel in bot.user.relationships:
+            if rel.type in (discord.RelationshipType.blocked, discord.RelationshipType.ignored):
+                asyncio.ensure_future(safe_unblock(rel.user, str(rel.type)))
+                swept += 1
     except AttributeError:
-        # .relationships may not be available in all discord.py-self builds
-        log.warning("[STARTUP] Could not read relationships list — skipping sweep.")
-
-    if sweep_count:
-        log.warning(f"[STARTUP] Queued {sweep_count} pre-existing block(s)/ignore(s) for reversal.")
-    else:
-        log.info("[STARTUP] No pre-existing blocks or ignores found.")
+        pass
+    if swept:
+        log.warning(f"[STARTUP] {swept} pre-existing block(s) queued for reversal.")
 
 
 @bot.event
 async def on_message(message: discord.Message):
-    """Instantly wipe any new message sent by own account."""
     if message.author.id != bot.user.id:
         return
-
     asyncio.ensure_future(safe_delete(message, source="live"))
 
 
 @bot.event
 async def on_message_edit(before: discord.Message, after: discord.Message):
-    """Wipe edited messages too — compromised accounts sometimes edit instead of send."""
     if after.author.id != bot.user.id:
         return
-
     asyncio.ensure_future(safe_delete(after, source="edit"))
 
 
-# ── NEW: Auto Unblock / Unignore ───────────────────────────────────────────────
 @bot.event
 async def on_relationship_add(relationship: discord.Relationship):
-    """
-    Fires whenever a relationship is created (friend request, block, ignore, etc.).
-    If the compromised account blocks or ignores someone, reverse it immediately.
-    """
-    rel_type = relationship.type
-    user     = relationship.user
-
-    # Only intercept hostile relationship types
-    if rel_type not in (
-        discord.RelationshipType.blocked,
-        discord.RelationshipType.ignored,
-    ):
+    if relationship.type not in (discord.RelationshipType.blocked, discord.RelationshipType.ignored):
         return
-
-    log.warning(
-        f"[ALERT] Hostile relationship detected: type='{rel_type}' "
-        f"→ target={user} (ID: {user.id}). Reversing instantly..."
-    )
-    asyncio.ensure_future(safe_unblock(user, reason=str(rel_type)))
+    log.warning(f"[ALERT] {relationship.type} detected → {relationship.user}. Reversing...")
+    asyncio.ensure_future(safe_unblock(relationship.user, str(relationship.type)))
 
 
 @bot.event
 async def on_relationship_update(before: discord.Relationship, after: discord.Relationship):
-    """
-    Fires when a relationship changes type (e.g. friend → blocked).
-    Catches the edge case where an existing relationship is escalated to a block.
-    """
-    if after.type not in (
-        discord.RelationshipType.blocked,
-        discord.RelationshipType.ignored,
-    ):
+    if after.type not in (discord.RelationshipType.blocked, discord.RelationshipType.ignored):
         return
-
-    user = after.user
-    log.warning(
-        f"[ALERT] Relationship escalated to '{after.type}' "
-        f"→ target={user} (ID: {user.id}). Reversing instantly..."
-    )
-    asyncio.ensure_future(safe_unblock(user, reason=str(after.type)))
+    log.warning(f"[ALERT] Escalated to {after.type} → {after.user}. Reversing...")
+    asyncio.ensure_future(safe_unblock(after.user, str(after.type)))
 
 
-# ── NEW: Auto Re-open Closed DMs ──────────────────────────────────────────────
 @bot.event
 async def on_private_channel_delete(channel: discord.abc.PrivateChannel):
-    """
-    Fires when a DM or Group DM is closed/hidden.
-    Re-opens it so the chat history stays visible to the account owner.
-    Only handles 1-on-1 DMChannel; Group DMs cannot be re-opened via API.
-    """
-    if not isinstance(channel, discord.DMChannel):
-        # Group DMs: log and skip — create_dm() doesn't apply
-        log.warning(
-            f"[DM CLOSED] Group DM (ID: {channel.id}) was closed. "
-            f"Cannot auto-reopen group DMs via API."
-        )
+    if not isinstance(channel, discord.DMChannel) or channel.recipient is None:
         return
-
-    recipient = channel.recipient
-    if recipient is None:
-        log.warning(f"[DM CLOSED] DMChannel {channel.id} closed but recipient is unknown — skipping.")
-        return
-
-    log.warning(
-        f"[ALERT] DM with {recipient} (ID: {recipient.id}) was closed/hidden. "
-        f"Re-opening immediately..."
-    )
-    asyncio.ensure_future(safe_reopen_dm(recipient))
+    log.warning(f"[ALERT] DM closed → {channel.recipient}. Re-opening...")
+    asyncio.ensure_future(safe_reopen_dm(channel.recipient))
 
 
-# ── Disconnect / Resume ────────────────────────────────────────────────────────
 @bot.event
 async def on_disconnect():
-    log.warning("[DISCONNECT] Bot disconnected from Discord.")
+    log.warning("[DISCONNECT]")
     print_stats()
 
 
 @bot.event
 async def on_resumed():
-    log.info("[RECONNECTED] Session resumed successfully.")
+    log.info("[RECONNECTED]")
+    try:
+        await bot.change_presence(status=discord.Status.invisible, activity=None)
+    except Exception:
+        pass
 
 
-# ── Entry Point with Reconnect Loop ───────────────────────────────────────────
+# ── Schedule Helpers ───────────────────────────────────────────────────────────
+def is_active_time() -> bool:
+    h = datetime.now(BD_TZ).hour
+    return ACTIVE_START <= h < ACTIVE_END
+
+
+def secs_to_start() -> float:
+    now = datetime.now(BD_TZ)
+    nxt = now.replace(hour=ACTIVE_START, minute=0, second=0, microsecond=0)
+    if now >= nxt:
+        nxt += timedelta(days=1)
+    return (nxt - now).total_seconds()
+
+
+def secs_to_end() -> float:
+    now = datetime.now(BD_TZ)
+    end = now.replace(hour=ACTIVE_END, minute=0, second=0, microsecond=0)
+    return max((end - now).total_seconds(), 0)
+
+
+# ── Main Loop ──────────────────────────────────────────────────────────────────
 async def main():
-    RECONNECT_DELAY = 5  # seconds between reconnect attempts
-
     while True:
+
+        # ── ঘুম — active window এর বাইরে ─────────────────────────────────────
+        if not is_active_time():
+            sleep = secs_to_start()
+            wake  = datetime.now(BD_TZ) + timedelta(seconds=sleep)
+            log.info(f"[SCHEDULE] Sleeping {sleep/3600:.2f}h → wake {wake.strftime('%H:%M BD')}")
+            await asyncio.sleep(sleep)
+            continue
+
+        # ── Active — ১টা থেকে ১০টা ────────────────────────────────────────────
+        remaining = secs_to_end()
+        log.info(f"[SCHEDULE] ON for {remaining/3600:.2f}h (until 10:00 BD)")
+
         try:
-            log.info("[START] Connecting to Discord...")
-            await bot.start(USER_TOKEN)
+            await asyncio.wait_for(bot.start(USER_TOKEN), timeout=remaining)
+
+        except asyncio.TimeoutError:
+            log.info("[SCHEDULE] 10:00 AM — shutting down for the day.")
+            print_stats()
+            if not bot.is_closed():
+                await bot.close()
+            sleep = secs_to_start()
+            wake  = datetime.now(BD_TZ) + timedelta(seconds=sleep)
+            log.info(f"[SCHEDULE] Next wake: {wake.strftime('%H:%M BD')}")
+            await asyncio.sleep(sleep)
 
         except discord.LoginFailure:
-            log.critical("[FATAL] Invalid token — check DISCORD_TOKEN. Exiting.")
+            log.critical("[FATAL] Bad token. Exiting.")
             sys.exit(1)
 
-        except discord.ConnectionClosed as e:
-            log.warning(f"[CONNECTION CLOSED] Code={e.code}. Reconnecting in {RECONNECT_DELAY}s...")
-            await asyncio.sleep(RECONNECT_DELAY)
-
-        except discord.GatewayNotFound:
-            log.warning(f"[GATEWAY ERROR] Discord gateway unreachable. Retrying in {RECONNECT_DELAY}s...")
-            await asyncio.sleep(RECONNECT_DELAY)
+        except (discord.ConnectionClosed, discord.GatewayNotFound) as e:
+            wait = jitter(5)
+            log.warning(f"[RECONNECT] {e.__class__.__name__} → retry in {wait:.1f}s")
+            await asyncio.sleep(wait)
 
         except Exception as e:
-            log.error(f"[ERROR] Unexpected: {e}. Retrying in {RECONNECT_DELAY}s...")
-            await asyncio.sleep(RECONNECT_DELAY)
+            wait = jitter(5)
+            log.error(f"[ERROR] {e} → retry in {wait:.1f}s")
+            await asyncio.sleep(wait)
 
         finally:
             if not bot.is_closed():
