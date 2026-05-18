@@ -1,15 +1,16 @@
 """
-Lockdown Bot v5.1 — Multi-Account & Advanced Scam Filter
-════════════════════════════════════════════════════════
-• অল-টাইম একটিভ (টাইম শিডিউল অফ করা)।
-• কোনো ব্যাকফিল (পুরোনো মেসেজ ডিলিট) হবে না।
-• "bro" + (লিংক/ছবি), ক্রিপ্টো স্ক্যাম এবং ২টির বেশি 'Untitled' স্ক্রিনশট স্প্যাম হলেই ডিলিট করবে।
+Lockdown Bot v6.0 — The Ultimate Anti-Hacker Engine
+═══════════════════════════════════════════════════
+• অল-টাইম সচল (No Schedule)।
+• আইসোলেটেড লুপ ও অ্যান্টি-ব্যান সেফগার্ড।
+• 'bro', ছবি+পিং, ফাঁকা ছবি, Untitled স্প্যাম ও ক্রিপ্টো ফিল্টার।
 """
 
 import asyncio
 import logging
 import os
 import random
+import re
 import signal
 import sys
 from dataclasses import dataclass
@@ -37,99 +38,99 @@ if not TOKENS:
         TOKENS.append(single)
 
 if not TOKENS:
-    raise ValueError(
-        "No tokens found! Add DISCORD_TOKEN_1, DISCORD_TOKEN_2, ... to your .env"
-    )
+    raise ValueError("No tokens found! Add DISCORD_TOKEN_1, DISCORD_TOKEN_2, ... to your .env")
 
-# ── Logging ────────────────────────────────────────────────────────────────────
+# ── Logging Setup ──────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
+    format="%(asctime)s [%(levelname)s] (%(name)s) %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
-root_log = logging.getLogger("lockdown")
+root_log = logging.getLogger("system")
 
-# ── Stealth & Filter Config ────────────────────────────────────────────────────
-DELETE_DELAY_MIN = 0.5
-DELETE_DELAY_MAX = 2.0
+# ── Stealth & Safety Thresholds ────────────────────────────────────────────────
+DELETE_DELAY_MIN = 0.8  # অ্যান্টি-ব্যান: মেসেজ ডিলিটের আগে র্যান্ডম ডিলে
+DELETE_DELAY_MAX = 2.4
 
-SCAM_KEYWORDS = [
-    "bonus", "usdt", "claim", "reward", "giveaway", 
-    "mrbeast", "crypto", "casino", "stake", "free money"
-]
-LINK_INDICATORS = ["http://", "https://", "www."]
+SCAM_KEYWORDS = ["bonus", "usdt", "claim", "reward", "giveaway", "mrbeast", "crypto", "casino", "stake", "free money"]
+LINK_RE = re.compile(r'(https?://[^\s]+|www\.[^\s]+)')
+MARKDOWN_LINK_RE = re.compile(r'\[.*?\]\(https?://\S+\)')
+GIBBERISH_RE = re.compile(r'^[a-zA-Z0-9]{7,15}$')
 
 
-# ── Advanced Scam Filter Logic ──────────────────────────────────────────────────
+# ── 🚨 The Master Filter Logic ─────────────────────────────────────────────────
 def is_scam_msg(message: discord.Message) -> bool:
-    """মেসেজটি স্ক্যাম কি না তা ফিল্টার করার অ্যাডভান্সড লজিক"""
-    content_lower = message.content.lower()
+    """হ্যাকারের সব প্যাটার্ন ধ্বংস করার মাস্টার লজিক (ফলস-পজিটিভ ফ্রি)"""
+    
+    if not message or (not message.content and not message.attachments and not message.embeds):
+        return False
 
-    # ১. হাই-রিক্স ক্রিপ্টো কি-ওয়ার্ড চেক
-    for word in SCAM_KEYWORDS:
-        if word in content_lower:
-            return True
-        for embed in message.embeds:
-            if embed.description and word in embed.description.lower():
-                return True
-            if embed.title and word in embed.title.lower():
-                return True
-
-    has_link = any(indicator in content_lower for indicator in LINK_INDICATORS)
+    content_lower = message.content.lower().strip()
     has_attachment = len(message.attachments) > 0 or len(message.embeds) > 0
+    has_mention = len(message.mentions) > 0
 
-    # ২. "bro" + (লিংক অথবা ইমেজ) কম্বিনেশন চেক
-    if "bro" in content_lower and (has_link or has_attachment):
+    # 🔴 রুল ১: মেসেজের যেকোনো জায়গায় 'bro' বা 'BRO' থাকলেই ডিলিট
+    if re.search(r'\bbro\b', content_lower):
         return True
 
-    # ৩. যেকোনো প্রকার লিংক এবং ইমেজ একসাথে থাকলে (স্ক্রিনশট স্ক্যাম)
-    if has_link and has_attachment:
+    # 🔴 রুল ২: মেসেজে ছবি আছে এবং সাথে কাউকে মেনশন (@ping) করেছে
+    if has_attachment and has_mention:
         return True
 
-    # ৪. 'Untitled' ফাইলনেম অ্যাটাক ফিল্টার (রিনেম না করা ৪টা বা ২টা ইমেজের স্প্যাম)
-    untitled_images = sum(1 for a in message.attachments if "untitled" in a.filename.lower())
+    # 🔴 রুল ৩: 'Untitled' অ্যাটাক (রিনেম না করা ২টি বা তার বেশি স্ক্রিনশট)
+    # হ্যাকাররা স্ক্রিনশট রিনেম করে না। একসাথে ২টি বা তার বেশি 'Untitled' আপলোড হলেই ডিলিট।
+    untitled_images = sum(1 for a in message.attachments if a.filename and "untitled" in a.filename.lower())
     if untitled_images >= 2:
         return True
 
-    # ৫. র‍্যান্ডম টেক্সট এভেশন ফিল্টার (যেমন: "meptluwx" + একাধিক ছবি)
+    # 🔴 রুল ৪: হ্যাকারের ইমেজ ব্লাস্ট (৩টি বা তার বেশি ফাঁকা বা হিজিবিজি ছবি)
+    # আপনি নরমালি ১-২টা ছবি পাঠালে ডিলিট হবে না। কিন্তু হ্যাকার যখন ৩-৪টা স্ক্যাম ছবি একসাথে মারে...
     if len(message.attachments) >= 3:
         words = content_lower.split()
-        # যদি মেসেজে কোনো কাজের কথা না থাকে, শুধু ১টি বড় র‍্যান্ডম শব্দ থাকে
-        if len(words) == 1 and len(words[0]) > 6:
-            return True
-        # যদি কোনো টেক্সটই না থাকে, হ্যাকার শুধু ইমেজ ব্লাস্ট করে
+        # যদি হ্যাকার "meptluwx" টাইপ হিজিবিজি লিখে...
+        if len(words) == 1 and bool(GIBBERISH_RE.match(words[0])):
+            vowels = sum(1 for char in words[0] if char in 'aeiou')
+            if vowels == 0 or (len(words[0]) / (vowels + 1) > 4.0):
+                return True
+        # অথবা হ্যাকার যদি কোনো টেক্সট ছাড়াই ৩-৪টা ছবি একসাথে ব্লাস্ট করে...
         if len(words) == 0:
             return True
+
+    # 🔴 রুল ৫: ক্রিপ্টো কি-ওয়ার্ড + লিংক
+    has_link = bool(LINK_RE.search(content_lower)) or bool(MARKDOWN_LINK_RE.search(content_lower))
+    for word in SCAM_KEYWORDS:
+        if re.search(r'\b' + re.escape(word) + r'\b', content_lower):
+            return True
+        for embed in message.embeds:
+            if embed.description and re.search(r'\b' + re.escape(word) + r'\b', embed.description.lower()): 
+                return True
+            if embed.title and re.search(r'\b' + re.escape(word) + r'\b', embed.title.lower()): 
+                return True
+                
+    if has_link and has_attachment:
+        return True
 
     return False
 
 
-# ── Shared Utilities ───────────────────────────────────────────────────────────
+# ── Safety Utilities ───────────────────────────────────────────────────────────
 async def human_delay(min_s: float = DELETE_DELAY_MIN, max_s: float = DELETE_DELAY_MAX) -> None:
     await asyncio.sleep(random.uniform(min_s, max_s))
 
-
 def jitter(base: float) -> float:
-    return base * random.uniform(0.7, 1.3)
-
+    return base * random.uniform(0.85, 1.35)
 
 def describe(message: discord.Message) -> str:
     parts = []
-    if message.content:
-        parts.append(f'text="{message.content[:50].replace(chr(10), " ")}"')
-    if message.attachments:
-        parts.append(f"files={[a.filename for a in message.attachments]}")
-    if message.embeds:
-        parts.append(f"{len(message.embeds)} embed(s)")
-    if message.stickers:
-        parts.append(f"{len(message.stickers)} sticker(s)")
+    if message.content: parts.append(f'text="{message.content[:35]}"')
+    if message.attachments: parts.append(f"files={[a.filename for a in message.attachments]}")
     ch = getattr(message.channel, "name", None) or f"DM/{message.channel.id}"
     return f"ch={ch} | {', '.join(parts) or '(no text)'}"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# AccountSession
+# AccountSession Instance (Isolated Loops)
 # ══════════════════════════════════════════════════════════════════════════════
 @dataclass
 class AccountStats:
@@ -138,30 +139,20 @@ class AccountStats:
     skipped:   int = 0
     unblocked: int = 0
     reopened:  int = 0
-
     def summary(self) -> str:
-        return (
-            f"Deleted={self.deleted} | Failed={self.failed} | "
-            f"Skipped={self.skipped} | Unblocked={self.unblocked} | "
-            f"Reopened={self.reopened}"
-        )
-
+        return f"Deleted={self.deleted} | Failed={self.failed} | Unblocked={self.unblocked} | Reopened={self.reopened}"
 
 class AccountSession:
     def __init__(self, token: str, label: str) -> None:
         self.token  = token
         self.label  = label  
         self.stats  = AccountStats()
-        self.log    = logging.getLogger(f"lockdown.{label}")
+        self.log    = logging.getLogger(label)
         self._bot: Optional[commands.Bot] = None
+        self._running_tasks: set[asyncio.Task] = set()
 
     def _make_bot(self) -> commands.Bot:
-        instance = commands.Bot(
-            command_prefix="\x00",
-            self_bot=True,
-            status=discord.Status.invisible,
-            activity=None,
-        )
+        instance = commands.Bot(command_prefix="\x00", self_bot=True, status=discord.Status.invisible, activity=None)
         self._register_events(instance)
         return instance
 
@@ -170,154 +161,121 @@ class AccountSession:
 
         @instance.event
         async def on_ready():
-            acc.log.info("=" * 60)
-            acc.log.info(f"   LOCKDOWN BOT v5.1 — [{acc.label}] ACTIVE")
-            acc.log.info(f"   User   : {instance.user} (ID: {instance.user.id})")
-            acc.log.info(f"   Filter : Active (Advanced Scam & Anti-Evasion Mode)")
-            acc.log.info("=" * 60)
-
-            try:
-                await instance.change_presence(status=discord.Status.invisible, activity=None)
-            except Exception:
-                pass
-
-            # Block sweep
-            swept = 0
+            acc.log.info(f"LOCKDOWN SHIELD ACTIVE — System Secure.")
+            try: await instance.change_presence(status=discord.Status.invisible, activity=None)
+            except Exception: pass
+            
             try:
                 for rel in instance.user.relationships:
                     if rel.type in (discord.RelationshipType.blocked, discord.RelationshipType.ignored):
-                        asyncio.ensure_future(acc._safe_unblock(rel.user, str(rel.type)))
-                        swept += 1
-            except AttributeError:
-                pass
-            if swept:
-                acc.log.warning(f"[STARTUP] {swept} pre-existing block(s) queued.")
+                        acc._dispatch_task(acc._safe_unblock(rel.user, str(rel.type)))
+            except Exception: pass
 
         @instance.event
         async def on_message(message: discord.Message):
-            if message.author.id != instance.user.id:
-                return
-            if is_scam_msg(message):
-                asyncio.ensure_future(acc._safe_delete(message, "live"))
+            if message.author.id != instance.user.id: return
+            if is_scam_msg(message): 
+                acc._dispatch_task(acc._safe_delete(message, "live"))
 
         @instance.event
         async def on_message_edit(before: discord.Message, after: discord.Message):
-            if after.author.id != instance.user.id:
-                return
-            if is_scam_msg(after):
-                asyncio.ensure_future(acc._safe_delete(after, "edit"))
+            if after.author.id != instance.user.id: return
+            if is_scam_msg(after): 
+                acc._dispatch_task(acc._safe_delete(after, "edit"))
 
         @instance.event
         async def on_relationship_add(relationship: discord.Relationship):
-            if relationship.type not in (discord.RelationshipType.blocked, discord.RelationshipType.ignored):
-                return
-            acc.log.warning(f"[ALERT] {relationship.type} on {relationship.user} — reversing...")
-            asyncio.ensure_future(acc._safe_unblock(relationship.user, str(relationship.type)))
+            if relationship.type not in (discord.RelationshipType.blocked, discord.RelationshipType.ignored): return
+            acc._dispatch_task(acc._safe_unblock(relationship.user, str(relationship.type)))
 
         @instance.event
         async def on_relationship_update(before: discord.Relationship, after: discord.Relationship):
-            if after.type not in (discord.RelationshipType.blocked, discord.RelationshipType.ignored):
-                return
-            acc.log.warning(f"[ALERT] Escalated to {after.type} on {after.user} — reversing...")
-            asyncio.ensure_future(acc._safe_unblock(after.user, str(after.type)))
+            if after.type not in (discord.RelationshipType.blocked, discord.RelationshipType.ignored): return
+            acc._dispatch_task(acc._safe_unblock(after.user, str(after.type)))
 
         @instance.event
         async def on_private_channel_delete(channel: discord.abc.PrivateChannel):
-            if not isinstance(channel, discord.DMChannel) or channel.recipient is None:
-                return
-            acc.log.warning(f"[ALERT] DM closed with {channel.recipient} — re-opening...")
-            asyncio.ensure_future(acc._safe_reopen_dm(channel.recipient))
+            if not isinstance(channel, discord.DMChannel) or channel.recipient is None: return
+            acc._dispatch_task(acc._safe_reopen_dm(channel.recipient))
 
-        @instance.event
-        async def on_disconnect():
-            acc.log.warning("[DISCONNECT]")
-            acc.log.info(f"[STATS] {acc.stats.summary()}")
+    def _dispatch_task(self, coro) -> None:
+        """মেমোরি লিক রোধ করার জন্য টাস্ক ডিসপ্যাচার"""
+        task = asyncio.create_task(coro)
+        self._running_tasks.add(task)
+        task.add_done_callback(self._running_tasks.discard)
 
-    # ── Action methods ──────────────────────────────────────────────────────────
+    # ── Safe Core Actions (Adaptive Exponential Backoff) ──────────────────────
     async def _safe_delete(self, message: discord.Message, source: str = "live") -> None:
         await human_delay(DELETE_DELAY_MIN, DELETE_DELAY_MAX)
+        base_backoff = 2.0
+        
         for attempt in range(1, 5):
             try:
                 await message.delete()
                 self.stats.deleted += 1
-                self.log.info(f"[WIPED #{self.stats.deleted}] [{source.upper()}] {describe(message)}")
+                self.log.info(f"[WIPED #{self.stats.deleted}] {describe(message)}")
                 return
             except discord.HTTPException as e:
                 if e.status == 429:
-                    wait = jitter(getattr(e, "retry_after", None) or attempt * 3.0)
-                    await asyncio.sleep(wait)
+                    retry_after = getattr(e, "retry_after", None) or (base_backoff ** attempt)
+                    wait_time = jitter(retry_after)
+                    self.log.warning(f"[RATE-LIMIT] Cooling down for {wait_time:.1f}s...")
+                    await asyncio.sleep(wait_time)
                 elif e.status in (403, 404):
                     self.stats.failed += 1 if e.status == 403 else 0
                     return
-                else:
-                    return
-            except Exception:
-                return
+                else: return
+            except Exception: return
         self.stats.failed += 1
 
     async def _safe_unblock(self, user: discord.User, reason: str = "") -> None:
-        await human_delay(0.5, 1.5)
+        await human_delay(0.6, 1.8)
         for attempt in range(1, 4):
             try:
                 await user.remove_relationship()
                 self.stats.unblocked += 1
-                self.log.warning(f"[UNBLOCKED #{self.stats.unblocked}] '{reason}' reversed → {user}")
+                self.log.warning(f"[AUTO-UNBLOCKED] Reversed block for {user.name}")
                 return
             except discord.HTTPException as e:
-                if e.status == 429:
-                    await asyncio.sleep(jitter(3.0))
-                else:
-                    return
-            except Exception:
-                return
+                if e.status == 429: await asyncio.sleep(jitter(4.0))
+                else: return
+            except Exception: return
 
     async def _safe_reopen_dm(self, user: discord.User) -> None:
-        await human_delay(0.5, 2.0)
+        await human_delay(0.6, 2.2)
         for attempt in range(1, 4):
             try:
-                ch = await user.create_dm()
+                await user.create_dm()
                 self.stats.reopened += 1
-                self.log.warning(f"[DM REOPENED #{self.stats.reopened}] Hidden DM with {user} restored.")
+                self.log.warning(f"[DM REOPENED] Restored closed chat with {user.name}")
                 return
             except discord.HTTPException as e:
-                if e.status == 429:
-                    await asyncio.sleep(jitter(3.0))
-                else:
-                    return
-            except Exception:
-                return
-
-    # ── Public Lifecycle ────────────────────────────────────────────────────────
-    async def run_session(self) -> None:
-        bot = self._make_bot()
-        self._bot = bot
-        try:
-            await bot.start(self.token)
-        except discord.LoginFailure:
-            self.log.critical("[FATAL] Bad token — skipping account.")
-            raise  
-        except Exception:
-            await asyncio.sleep(5)
-        finally:
-            if not bot.is_closed():
-                await bot.close()
-            self._bot = None
+                if e.status == 429: await asyncio.sleep(jitter(4.0))
+                else: return
+            except Exception: return
 
     async def run_forever(self) -> None:
-        self.log.info(f"[INIT] Session started.")
+        self.log.info(f"Thread initialized.")
         while True:
+            bot = self._make_bot()
+            self._bot = bot
             try:
-                await self.run_session()
+                await bot.start(self.token)
             except discord.LoginFailure:
+                self.log.critical("[FATAL] Token invalid — shutting down this thread.")
                 return
-            await asyncio.sleep(5)
+            except Exception:
+                await asyncio.sleep(5)
+            finally:
+                if not bot.is_closed(): await bot.close()
+                self._bot = None
+                await asyncio.sleep(5)
 
-
-# ── Global Shutdown & Main ─────────────────────────────────────────────────────
+# ── Global Shutdown Handling ───────────────────────────────────────────────────
 _sessions: list[AccountSession] = []
 
 def handle_exit(sig, frame):
-    root_log.info(f"[SHUTDOWN] Signal {sig}. Printing Stats...")
+    root_log.info(f"\n[SHUTDOWN] Interrupted. Generating report...")
     for s in _sessions:
         root_log.info(f"   [{s.label}] {s.stats.summary()}")
     sys.exit(0)
@@ -328,8 +286,9 @@ signal.signal(signal.SIGTERM, handle_exit)
 async def main():
     global _sessions
     _sessions = [AccountSession(token=tok, label=f"ACC-{i + 1}") for i, tok in enumerate(TOKENS)]
-    root_log.info(f"[MAIN] Starting launcher for {[s.label for s in _sessions]}")
+    root_log.info(f"[LAUNCHER] Spawning {len(_sessions)} security threads.")
     await asyncio.gather(*[s.run_forever() for s in _sessions], return_exceptions=True)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try: asyncio.run(main())
+    except KeyboardInterrupt: pass
