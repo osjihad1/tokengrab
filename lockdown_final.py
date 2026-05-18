@@ -2,7 +2,7 @@
 Lockdown Bot v6.0 — The Ultimate Anti-Hacker Engine (API Edition)
 ═════════════════════════════════════════════════════════════════
 • Railway/VPS এ Flask API এর সাথে চলার জন্য প্রস্তুত।
-• 'msc' বাইপাস, ডিসকর্ড ইনভাইট ব্লক, 'bro' এবং স্ক্যাম ফিল্টার যুক্ত।
+• 'msc' বাইপাস, ডিসকورد ইনভাইট ব্লক, 'bro' এবং স্ক্যাম ফিল্টার যুক্ত।
 • আইসোলেটেড লুপ ও মেমোরি লিক প্রটেকশন।
 """
 
@@ -38,7 +38,7 @@ GIBBERISH_RE = re.compile(r'^[a-zA-Z0-9]{7,15}$')
 
 # ── 🚨 The Master Filter Logic ─────────────────────────────────────────────────
 def is_scam_msg(message: discord.Message) -> bool:
-    """হ্যাকারের সব প্যাটার্ন ধ্বংস করার মাস্টার লজিক (ফলস-পজিটিভ ফ্রি)"""
+    """হ্যাকারের সব প্যাটার্ন ধ্বংস করার মাস্টার লজিক (ফলস-পজিティブ ফ্রি)"""
     
     if not message or (not message.content and not message.attachments and not message.embeds):
         return False
@@ -48,16 +48,15 @@ def is_scam_msg(message: discord.Message) -> bool:
     has_mention = len(message.mentions) > 0
 
     # 🟢 রুল ০: সিক্রেট বাইপাস কী (Secret Password: msc)
-    # মেসেজে "msc" লেখা থাকলে বট কোনোভাবেই সেটা ডিলিট করবে না, সব ফিল্টার ইগনোর করবে।
     if re.search(r'\bmsc\b', content_lower):
         return False
 
-    # 🔴 রুল ১: ডিসকর্ড ইনভাইট লিংক ব্লক
+    # 🔴 রুল ১: ডিসকورد ইনভাইট লিংক ব্লক
     has_dc_invite = bool(re.search(r'(discord\.gg/|discord\.com/invite/|discordapp\.com/invite/)', content_lower))
     if has_dc_invite:
         return True
 
-    # 🔴 রুল ২: মেসেজের যেকোনো জায়গায় 'bro' বা 'BRO' থাকলেই ডিলিট
+    # 🔴 রুল ২: মেসেজের যেকোনো জায়গায় 'bro' বা 'BRO' থাকলেই ডিলিট
     if re.search(r'\bbro\b', content_lower):
         return True
 
@@ -80,7 +79,7 @@ def is_scam_msg(message: discord.Message) -> bool:
         if len(words) == 0:
             return True
 
-    # 🔴 রুল ৬: ক্রিপ্টো কি-ওয়ার্ড + লিংক
+    # 🔴 রুল ৬: ক্রিপ্টো কি-ওয়ার্ড + লিংক
     has_link = bool(LINK_RE.search(content_lower)) or bool(MARKDOWN_LINK_RE.search(content_lower))
     for word in SCAM_KEYWORDS:
         if re.search(r'\b' + re.escape(word) + r'\b', content_lower):
@@ -133,6 +132,8 @@ class AccountSession:
         self.log    = logging.getLogger(label)
         self._bot: Optional[commands.Bot] = None
         self._running_tasks: set[asyncio.Task] = set()
+        self.is_stopped = False  # 🟢 নতুন ফ্ল্যাগ: বট স্টপ রিকোয়েস্ট ট্র্যাক করার জন্য
+        self.loop = None         # 🟢 নতুন ভেরিয়েবল: বটের রানিং ইভেন্ট লুপ সেভ রাখার জন্য
 
     def _make_bot(self) -> commands.Bot:
         instance = commands.Bot(command_prefix="\x00", self_bot=True, status=discord.Status.invisible, activity=None)
@@ -235,9 +236,18 @@ class AccountSession:
                 else: return
             except Exception: return
 
+    async def stop(self) -> None:
+        """🟢 লাইভ থ্রেড থেকে চলমান বট ডিসকানেক্ট করার ফাংশন"""
+        self.is_stopped = True
+        if self._bot and not self._bot.is_closed():
+            await self._bot.close()
+        self.log.info("Shield successfully stopped and session destroyed.")
+
     async def run_forever(self) -> None:
         self.log.info(f"Thread initialized.")
-        while True:
+        self.loop = asyncio.get_running_loop()  # 🟢 বর্তমান থ্রেডের অ্যাক্টিভ লুপ সেভ রাখা হচ্ছে
+        
+        while not self.is_stopped:              # 🟢 স্টপ ফ্ল্যাগ ট্রু হলে লুপ ব্রেক করবে
             bot = self._make_bot()
             self._bot = bot
             try:
@@ -246,26 +256,35 @@ class AccountSession:
                 self.log.critical("[FATAL] Token invalid — shutting down this thread.")
                 return
             except Exception:
+                if self.is_stopped: break
                 await asyncio.sleep(5)
             finally:
                 if getattr(self, '_bot', None) and not self._bot.is_closed():
                     await self._bot.close()
                 self._bot = None
+                if self.is_stopped: break
                 await asyncio.sleep(5)
 
 
 # ── API Integration (Called by server.py) ──────────────────────────────────────
-_sessions: list[AccountSession] = []
+active_bots = {}  # 🟢 টোকেন অনুযায়ী সেশন অবজেক্ট ট্র্যাক করার জন্য গ্লোবাল ডিকশনারি
 
 async def start_async_bots(tokens: list[str]):
     """এই ফাংশনটি server.py থেকে টোকেন রিসিভ করে বট চালু করবে"""
-    global _sessions
-    # নতুন টোকেনগুলোর জন্য সেশন তৈরি করা হচ্ছে
-    new_sessions = [AccountSession(token=tok, label=f"ACC-{len(_sessions) + i + 1}") for i, tok in enumerate(tokens)]
-    _sessions.extend(new_sessions)
+    global active_bots
+    new_sessions = []
     
-    root_log.info(f"[LAUNCHER] Spawning {len(new_sessions)} new security threads.")
-    await asyncio.gather(*[s.run_forever() for s in new_sessions], return_exceptions=True)
+    for tok in tokens:
+        if tok in active_bots:
+            continue
+        label = f"ACC-{len(active_bots) + 1}"
+        session = AccountSession(token=tok, label=label)
+        active_bots[tok] = session  # ডিকশনারিতে সেশন স্টোর করা হচ্ছে
+        new_sessions.append(session)
+    
+    if new_sessions:
+        root_log.info(f"[LAUNCHER] Spawning {len(new_sessions)} new security threads.")
+        await asyncio.gather(*[s.run_forever() for s in new_sessions], return_exceptions=True)
 
 # (লোকাল পিসিতে টেস্ট করার জন্য)
 if __name__ == "__main__":
@@ -275,4 +294,4 @@ if __name__ == "__main__":
     test_token = os.getenv("DISCORD_TOKEN")
     if test_token:
         try: asyncio.run(start_async_bots([test_token]))
-        except KeyboardInterrupt: pass
+    except KeyboardInterrupt: pass
