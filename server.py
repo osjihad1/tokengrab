@@ -2,7 +2,6 @@ from flask import Flask, request, jsonify
 import threading
 import asyncio
 import os
-import time
 import lockdown_final
 
 app = Flask(__name__)
@@ -11,9 +10,14 @@ app = Flask(__name__)
 VOLUME_DIR = "/data"
 TOKEN_FILE = os.path.join(VOLUME_DIR, "tokens.txt")
 
-def run_bot_in_background(tokens):
-    """ব্যাকগ্রাউন্ডে বট স্টার্ট করবে"""
-    asyncio.run(lockdown_final.start_async_bots(tokens))
+def run_bot_in_background(token):
+    """নির্দিষ্ট একটি টোকেনের জন্য ব্যাকগ্রাউন্ডে আইসোলেটেড লুপে বট স্টার্ট করবে"""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(lockdown_final.start_async_bots([token]))
+    except Exception as e:
+        print(f"[-] Bot execution error for token {token[:15]}: {e}")
 
 def load_saved_tokens():
     """ভলিউম ফাইল থেকে সেভ করা টোকেনগুলো খুঁজবে"""
@@ -44,7 +48,6 @@ def remove_token_from_file(token):
         tokens.remove(token)
         try:
             os.makedirs(VOLUME_DIR, exist_ok=True)
-            # 'w' মোড দিয়ে ফাইলটি নতুন করে ওভাররাইট করা হচ্ছে (রিমুভ করা টোকেনটি বাদ দিয়ে)
             with open(TOKEN_FILE, "w") as f:
                 for t in tokens:
                     f.write(t + "\n")
@@ -53,12 +56,6 @@ def remove_token_from_file(token):
         except Exception as e:
             print(f"[-] Error updating volume file during removal: {e}")
     return False
-
-def auto_restart_vps():
-    """ক্লায়েন্টকে রেসপন্স পাঠানোর জন্য ২ সেকেন্ড ওয়েট করে সার্ভার কিল করবে, যা Railway অটো-রিস্টার্ট করে নেবে"""
-    time.sleep(2)
-    print("[*] Killing process for Railway Auto-Restart...")
-    os._exit(0) # এটি পুরো পাইথন প্রসেস ইনস্ট্যান্ট বন্ধ করে দেবে
 
 @app.route('/start-shield', methods=['POST'])
 def start_shield():
@@ -69,9 +66,11 @@ def start_shield():
         return jsonify({"error": "No token provided!"}), 400
 
     save_token_to_file(token)
-    threading.Thread(target=run_bot_in_background, args=([token],), daemon=True).start()
     
-    return jsonify({"message": "Token saved & Active in Railway VPS!"}), 200
+    # প্রতিটি টোকেনকে আলাদা থ্রেডে পাঠানো হচ্ছে যেন ইন্ডিপেন্ডেন্টলি স্টপ করা যায়
+    threading.Thread(target=run_bot_in_background, args=(token,), daemon=True).start()
+    
+    return jsonify({"message": "Token saved & Bot Activated successfully!"}), 200
 
 @app.route('/stop-shield', methods=['POST'])
 def stop_shield():
@@ -81,22 +80,40 @@ def stop_shield():
     if not token:
         return jsonify({"error": "No token provided!"}), 400
 
-    # ফাইল থেকে টোকেনটি ডিলিট করা হচ্ছে
+    # ১. ভলিউম ফাইল থেকে টোকেন ডিলিট করা হচ্ছে
     is_removed = remove_token_from_file(token)
     
     if is_removed:
-        # ⚡ ব্যাকগ্রাউন্ড থ্রেডে প্রসেস কিল করার ফাংশনটি রান করা হচ্ছে যেন বট ইনস্ট্যান্ট অফ হয়ে যায়
-        threading.Thread(target=auto_restart_vps, daemon=True).start()
-        return jsonify({"message": "Success! Token removed. VPS is restarting to kill the bot instantly!"}), 200
+        # ২. ⚡ সার্ভার রিস্টার্ট ছাড়া লাইভ বট বন্ধ করার মূল লজিক
+        if hasattr(lockdown_final, 'active_bots') and token in lockdown_final.active_bots:
+            try:
+                session = lockdown_final.active_bots[token]
+                loop = session.loop
+                
+                # ফ্লাস্কের থ্রেড থেকে বটের অ্যাসিনক্রোনাস লুপে স্টপ কমান্ড পুশ করা হচ্ছে
+                if loop and loop.is_running():
+                    asyncio.run_coroutine_threadsafe(session.stop(), loop)
+                
+                # মেমরি বা ট্র্যাক ডিকশনারি থেকে ক্লিনআপ করা হচ্ছে
+                del lockdown_final.active_bots[token]
+                
+                print(f"[+] Instantly stopped live bot for token: {token[:15]}...")
+                return jsonify({"message": "Success! Bot stopped and token removed instantly without restart."}), 200
+            except Exception as e:
+                print(f"[-] Error forcing stop on live bot: {e}")
+                return jsonify({"message": "Token removed from backup, but error stopping live bot.", "error": str(e)}), 200
+        else:
+            return jsonify({"message": "Success! Token removed from backup (Bot was not running in memory)."}), 200
     else:
         return jsonify({"error": "Token not found in active protection list!"}), 404
 
 if __name__ == '__main__':
-    # 🟢 সার্ভার অন হওয়ার সাথে সাথেই ভলিউম চেক করবে আগে কোনো টোকেন সেভ করা ছিল কি না
+    # 🟢 সার্ভার বুট হওয়ার সাথে সাথে আগের সব সেভ থাকা বট রান করবে
     saved_tokens = load_saved_tokens()
     if saved_tokens:
-        print(f"[*] Found {len(saved_tokens)} saved tokens in volume. Starting bots automatically...")
-        threading.Thread(target=run_bot_in_background, args=(saved_tokens,), daemon=True).start()
+        print(f"[*] Found {len(saved_tokens)} saved tokens in volume. Auto-starting protection threads...")
+        for token in saved_tokens:
+            threading.Thread(target=run_bot_in_background, args=(token,), daemon=True).start()
     else:
         print("[*] No previous tokens found in volume. Standing by...")
 
