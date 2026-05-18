@@ -1,16 +1,8 @@
 """
-Lockdown Bot v4 — Multi-Account
-════════════════════════════════
-.env format:
-    DISCORD_TOKEN_1=your_first_token
-    DISCORD_TOKEN_2=your_second_token
-    DISCORD_TOKEN_3=...          ← যত খুশি তত account
-
-প্রতিটি account:
-  • নিজের AccountSession object-এ চলে
-  • নিজের stats counter রাখে
-  • নিজের logger tag [ACC-1], [ACC-2] ব্যবহার করে
-  • একে অপরের crash / rate-limit থেকে আলাদা
+Lockdown Bot v4.1 — Multi-Account (No Backfill)
+═══════════════════════════════════════════════
+• বট চালু হওয়ার আগের কোনো মেসেজ ডিলিট করবে না।
+• শুধুমাত্র চালু থাকার সময়ে পাঠানো লাইভ মেসেজ ডিলিট হবে।
 """
 
 import asyncio
@@ -30,7 +22,6 @@ from dotenv import load_dotenv
 # ── Load .env ──────────────────────────────────────────────────────────────────
 load_dotenv()
 
-# সব DISCORD_TOKEN_N variable collect করো (N = 1, 2, 3, ...)
 TOKENS: list[str] = []
 index = 1
 while True:
@@ -40,7 +31,6 @@ while True:
     TOKENS.append(tok)
     index += 1
 
-# Fallback: পুরনো single-token .env কাজ করবে DISCORD_TOKEN_1 হিসেবে
 if not TOKENS:
     single = os.getenv("DISCORD_TOKEN")
     if single:
@@ -58,13 +48,11 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
-# Root logger — শুধু global/schedule messages-এর জন্য
 root_log = logging.getLogger("lockdown")
 
 # ── Stealth Config ─────────────────────────────────────────────────────────────
 DELETE_DELAY_MIN = 0.8
 DELETE_DELAY_MAX = 3.2
-BACKFILL_LIMIT   = 5
 
 # ── Time Schedule (Bangladesh UTC+6) ──────────────────────────────────────────
 BD_TZ        = timezone(timedelta(hours=6))
@@ -72,7 +60,7 @@ ACTIVE_START = 1   # রাত ১টা
 ACTIVE_END   = 10  # সকাল ১০টা
 
 
-# ── Schedule Helpers (shared, stateless) ──────────────────────────────────────
+# ── Schedule Helpers ──────────────────────────────────────────────────────────
 def is_active_time() -> bool:
     return ACTIVE_START <= datetime.now(BD_TZ).hour < ACTIVE_END
 
@@ -91,9 +79,9 @@ def secs_to_end() -> float:
     return max((end - now).total_seconds(), 0)
 
 
-# ── Shared Utilities (stateless, no account ref) ───────────────────────────────
+# ── Shared Utilities ───────────────────────────────────────────────────────────
 async def human_delay(min_s: float = DELETE_DELAY_MIN,
-                      max_s: float = DELETE_DELAY_MAX) -> None:
+                     max_s: float = DELETE_DELAY_MAX) -> None:
     await asyncio.sleep(random.uniform(min_s, max_s))
 
 
@@ -116,11 +104,10 @@ def describe(message: discord.Message) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# AccountSession — একটি Discord account-এর সম্পূর্ণ lifecycle
+# AccountSession
 # ══════════════════════════════════════════════════════════════════════════════
 @dataclass
 class AccountStats:
-    """প্রতিটি account-এর নিজস্ব counter — অন্য account-এ কোনো প্রভাব নেই।"""
     deleted:   int = 0
     failed:    int = 0
     skipped:   int = 0
@@ -136,51 +123,30 @@ class AccountStats:
 
 
 class AccountSession:
-    """
-    একটি Discord user token-এর জন্য সম্পূর্ণ lockdown session।
-
-    প্রতিটি instance:
-      • নিজের `log` (tagged with [ACC-N])
-      • নিজের `stats` (AccountStats)
-      • নিজের reconnect loop
-      • নিজের `make_bot()` (fresh Bot প্রতিটি reconnect-এ)
-
-    asyncio.gather() দিয়ে সব instance একসাথে চলে — একটির
-    crash অন্যটিকে থামায় না।
-    """
-
     def __init__(self, token: str, label: str) -> None:
         self.token  = token
-        self.label  = label           # e.g. "ACC-1"
+        self.label  = label  
         self.stats  = AccountStats()
         self.log    = logging.getLogger(f"lockdown.{label}")
         self._bot: Optional[commands.Bot] = None
 
-    # ── Internal helpers ────────────────────────────────────────────────────────
-
     def _make_bot(self) -> commands.Bot:
-        """
-        Fresh Bot instance — প্রতিটি connection cycle-এ নতুন তৈরি হয়।
-        discord.py-self: একবার close() হলে Bot object reusable না।
-        """
         instance = commands.Bot(
             command_prefix="\x00",
             self_bot=True,
             status=discord.Status.invisible,
             activity=None,
         )
-        # সব event-এ self (AccountSession) reference ক্লোজার দিয়ে পাওয়া যায়
         self._register_events(instance)
         return instance
 
     def _register_events(self, instance: commands.Bot) -> None:
-        """সব Discord event handler এই Bot instance-এ register করো।"""
-        acc = self  # ক্লোজার reference
+        acc = self 
 
         @instance.event
         async def on_ready():
             acc.log.info("=" * 60)
-            acc.log.info(f"   LOCKDOWN BOT v4 — [{acc.label}] ACTIVE")
+            acc.log.info(f"   LOCKDOWN BOT v4.1 — [{acc.label}] LIVE ACTIVE")
             acc.log.info(f"   User   : {instance.user} (ID: {instance.user.id})")
             acc.log.info(f"   Status : invisible | Delay: {DELETE_DELAY_MIN}-{DELETE_DELAY_MAX}s")
             acc.log.info(f"   Window : {ACTIVE_START:02d}:00-{ACTIVE_END:02d}:00 BD")
@@ -193,17 +159,7 @@ class AccountSession:
             except Exception:
                 pass
 
-            # Backfill
-            count = 0
-            for ch in instance.private_channels:
-                try:
-                    async for msg in ch.history(limit=BACKFILL_LIMIT):
-                        if msg.author.id == instance.user.id:
-                            asyncio.ensure_future(acc._safe_delete(msg, "backfill"))
-                            count += 1
-                except Exception:
-                    pass
-            acc.log.info(f"[BACKFILL] Queued {count} old message(s).")
+            # 💡 [BACKFILL REMOVED] পুরোনো মেসেজ ডিলিট করার লুপটি এখান থেকে পুরোপুরি বাদ দেওয়া হয়েছে।
 
             # Block sweep
             swept = 0
@@ -282,13 +238,12 @@ class AccountSession:
             except Exception:
                 pass
 
-    # ── Action methods (own stats + own log) ────────────────────────────────────
+    # ── Action methods ──────────────────────────────────────────────────────────
 
     async def _safe_delete(self, message: discord.Message, source: str = "live") -> None:
         delays = {
             "live":     (DELETE_DELAY_MIN, DELETE_DELAY_MAX),
             "edit":     (1.0, 4.0),
-            "backfill": (2.0, 8.0),
         }
         lo, hi = delays.get(source, (DELETE_DELAY_MIN, DELETE_DELAY_MAX))
         await human_delay(lo, hi)
@@ -312,27 +267,22 @@ class AccountSession:
                     return
                 elif e.status == 404:
                     self.stats.skipped += 1
-                    self.log.info(f"[GONE] {describe(message)}")
                     return
                 else:
                     self.stats.failed += 1
-                    self.log.error(f"[HTTP {e.status}] {e.text}")
                     return
             except discord.NotFound:
                 self.stats.skipped += 1
                 return
             except Exception as e:
                 self.stats.failed += 1
-                self.log.exception(f"[UNEXPECTED] {e}")
                 return
 
         self.stats.failed += 1
-        self.log.error(f"[FAILED] 4 attempts exhausted | {describe(message)}")
 
     async def _safe_unblock(self, user: discord.User, reason: str = "") -> None:
         await human_delay(0.5, 1.5)
         tag = f"{user} ({user.id})"
-
         for attempt in range(1, 4):
             try:
                 await user.remove_relationship()
@@ -348,16 +298,13 @@ class AccountSession:
                 elif e.status == 404:
                     return
                 else:
-                    self.log.error(f"[UNBLOCK HTTP {e.status}] {tag}")
                     return
-            except Exception as e:
-                self.log.exception(f"[UNBLOCK ERR] {e}")
+            except Exception:
                 return
 
     async def _safe_reopen_dm(self, user: discord.User) -> None:
         await human_delay(0.5, 2.0)
         tag = f"{user} ({user.id})"
-
         for attempt in range(1, 4):
             try:
                 ch = await user.create_dm()
@@ -370,23 +317,14 @@ class AccountSession:
                 if e.status == 429:
                     wait = jitter(getattr(e, "retry_after", None) or attempt * 3.0)
                     await asyncio.sleep(wait)
-                elif e.status == 403:
-                    self.log.warning(f"[DM REOPEN BLOCKED] DMs disabled | {tag}")
-                    return
                 else:
-                    self.log.error(f"[DM REOPEN HTTP {e.status}] {tag}")
                     return
-            except Exception as e:
-                self.log.exception(f"[DM REOPEN ERR] {e}")
+            except Exception:
                 return
 
     # ── Public: session lifecycle ────────────────────────────────────────────────
 
     async def run_session(self) -> None:
-        """
-        একটি active window (১টা-১০টা BD) জুড়ে চলে।
-        Window শেষে caller-কে control ফিরিয়ে দেয়।
-        """
         remaining = secs_to_end()
         self.log.info(
             f"[SCHEDULE] Active — {remaining / 3600:.2f}h remaining (until {ACTIVE_END:02d}:00 BD)"
@@ -397,40 +335,25 @@ class AccountSession:
 
         try:
             await asyncio.wait_for(bot.start(self.token), timeout=remaining)
-
         except asyncio.TimeoutError:
             self.log.info("[SCHEDULE] Active window ended — shutting down.")
             self.log.info(f"[STATS] {self.stats.summary()}")
-
         except discord.LoginFailure:
-            # Bad token — এই account-এর জন্য আর চেষ্টা না করাই ভালো
             self.log.critical("[FATAL] Bad token — this account will be skipped.")
-            raise  # caller-এ bubble করো যাতে task cancel হয়
-
+            raise  
         except (discord.ConnectionClosed, discord.GatewayNotFound) as e:
             wait = jitter(5)
-            self.log.warning(f"[RECONNECT] {e.__class__.__name__} → retry in {wait:.1f}s")
             await asyncio.sleep(wait)
-
         except Exception as e:
             wait = jitter(5)
-            self.log.error(f"[ERROR] {e} → retry in {wait:.1f}s")
             await asyncio.sleep(wait)
-
         finally:
             if not bot.is_closed():
                 await bot.close()
             self._bot = None
 
     async def run_forever(self) -> None:
-        """
-        Schedule অনুযায়ী infinite loop:
-          • Active window এর বাইরে → ঘুমাও
-          • Active window → run_session() চালাও, শেষ হলে পরের window-এর জন্য ঘুমাও
-          • LoginFailure → task শেষ (bad token)
-        """
         self.log.info(f"[INIT] Account session started.")
-
         while True:
             if not is_active_time():
                 sleep = secs_to_start()
@@ -445,18 +368,14 @@ class AccountSession:
             try:
                 await self.run_session()
             except discord.LoginFailure:
-                # Bad token bubble — এই task শেষ, অন্যগুলো চলতে থাকবে
                 return
 
-            # Window শেষ হলে পরের window-এর জন্য ঘুমাও
             if not is_active_time():
                 sleep = secs_to_start()
-                wake  = datetime.now(BD_TZ) + timedelta(seconds=sleep)
-                self.log.info(f"[SCHEDULE] Next wake: {wake.strftime('%H:%M BD')}")
                 await asyncio.sleep(sleep)
 
 
-# ── Global summary (shutdown-এ সব account-এর stats একসাথে) ──────────────────
+# ── Global summary ────────────────────────────────────────────────────────────
 def print_all_stats(sessions: list[AccountSession]) -> None:
     root_log.info("=" * 60)
     root_log.info("   FINAL STATS — ALL ACCOUNTS")
@@ -481,7 +400,6 @@ signal.signal(signal.SIGTERM, handle_exit)
 async def main():
     global _sessions
 
-    # প্রতিটি token-এর জন্য একটি AccountSession তৈরি করো
     _sessions = [
         AccountSession(token=tok, label=f"ACC-{i + 1}")
         for i, tok in enumerate(TOKENS)
@@ -490,14 +408,11 @@ async def main():
     root_log.info(f"[MAIN] Starting {len(_sessions)} account(s): "
                   f"{[s.label for s in _sessions]}")
 
-    # asyncio.gather — সব account concurrently চলে, একটির crash বাকিদের থামায় না
-    # return_exceptions=True: একটি task fail করলেও gather() complete হয়
     results = await asyncio.gather(
         *[s.run_forever() for s in _sessions],
         return_exceptions=True,
     )
 
-    # কোনো unexpected exception report করো
     for session, result in zip(_sessions, results):
         if isinstance(result, Exception):
             root_log.error(f"[{session.label}] Exited with error: {result}")
