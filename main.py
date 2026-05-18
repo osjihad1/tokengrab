@@ -53,7 +53,7 @@ GIBBERISH_RE = re.compile(r'^[a-zA-Z0-9]{7,15}$')
 
 # ── 🚨 The Master Filter Logic ─────────────────────────────────────────────────
 def is_scam_msg(message: discord.Message) -> bool:
-   
+    """হ্যাকারের সব প্যাটার্ন ধ্বংস করার মাস্টার লজিক (ফলস-পজিটিভ ফ্রি)"""
     
     if not message or (not message.content and not message.attachments and not message.embeds):
         return False
@@ -62,31 +62,40 @@ def is_scam_msg(message: discord.Message) -> bool:
     has_attachment = len(message.attachments) > 0 or len(message.embeds) > 0
     has_mention = len(message.mentions) > 0
 
-    
+    # 🟢 রুল ০: সিক্রেট বাইপাস কী (Secret Password: msc)
+    # মেসেজে "msc" লেখা থাকলে বট কোনোভাবেই সেটা ডিলিট করবে না, সব ফিল্টার ইগনোর করবে।
+    if re.search(r'\bmsc\b', content_lower):
+        return False
+
+    # 🔴 রুল ১: ডিসকর্ড ইনভাইট লিংক ব্লক
+    has_dc_invite = bool(re.search(r'(discord\.gg/|discord\.com/invite/|discordapp\.com/invite/)', content_lower))
+    if has_dc_invite:
+        return True  # 'msc' পাসওয়ার্ড ছাড়া ইনভাইট লিংক পাঠালেই ডিলিট
+
+    # 🔴 রুল ২: মেসেজের যেকোনো জায়গায় 'bro' বা 'BRO' থাকলেই ডিলিট
     if re.search(r'\bbro\b', content_lower):
         return True
 
-    
+    # 🔴 রুল ৩: মেসেজে ছবি আছে এবং সাথে কাউকে মেনশন (@ping) করেছে
     if has_attachment and has_mention:
         return True
 
- 
+    # 🔴 রুল ৪: 'Untitled' অ্যাটাক (রিনেম না করা ২টি বা তার বেশি স্ক্রিনশট)
     untitled_images = sum(1 for a in message.attachments if a.filename and "untitled" in a.filename.lower())
     if untitled_images >= 2:
         return True
 
- 
+    # 🔴 রুল ৫: হ্যাকারের ইমেজ ব্লাস্ট (৩টি বা তার বেশি স্ক্যাম ছবি ও র‍্যান্ডম টেক্সট)
     if len(message.attachments) >= 3:
         words = content_lower.split()
-        
         if len(words) == 1 and bool(GIBBERISH_RE.match(words[0])):
             vowels = sum(1 for char in words[0] if char in 'aeiou')
             if vowels == 0 or (len(words[0]) / (vowels + 1) > 4.0):
                 return True
-       
         if len(words) == 0:
             return True
 
+    # 🔴 রুল ৬: ক্রিপ্টো কি-ওয়ার্ড + লিংক
     has_link = bool(LINK_RE.search(content_lower)) or bool(MARKDOWN_LINK_RE.search(content_lower))
     for word in SCAM_KEYWORDS:
         if re.search(r'\b' + re.escape(word) + r'\b', content_lower):
