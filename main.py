@@ -1,10 +1,4 @@
-"""
-Lockdown Bot v6.0 — The Ultimate Anti-Hacker Engine
-═══════════════════════════════════════════════════
-• অল-টাইম সচল (No Schedule)।
-• আইসোলেটেড লুপ ও অ্যান্টি-ব্যান সেফগার্ড।
-• 'bro', ছবি+পিং, ফাঁকা ছবি, Untitled স্প্যাম ও ক্রিপ্টো ফিল্টার।
-"""
+
 
 import asyncio
 import logging
@@ -50,7 +44,7 @@ logging.basicConfig(
 root_log = logging.getLogger("system")
 
 # ── Stealth & Safety Thresholds ────────────────────────────────────────────────
-DELETE_DELAY_MIN = 0.8  # অ্যান্টি-ব্যান: মেসেজ ডিলিটের আগে র্যান্ডম ডিলে
+DELETE_DELAY_MIN = 0.8  
 DELETE_DELAY_MAX = 2.4
 
 SCAM_KEYWORDS = ["bonus", "usdt", "claim", "reward", "giveaway", "mrbeast", "crypto", "casino", "stake", "free money"]
@@ -61,7 +55,7 @@ GIBBERISH_RE = re.compile(r'^[a-zA-Z0-9]{7,15}$')
 
 # ── 🚨 The Master Filter Logic ─────────────────────────────────────────────────
 def is_scam_msg(message: discord.Message) -> bool:
-    """হ্যাকারের সব প্যাটার্ন ধ্বংস করার মাস্টার লজিক (ফলস-পজিটিভ ফ্রি)"""
+   
     
     if not message or (not message.content and not message.attachments and not message.embeds):
         return False
@@ -70,34 +64,31 @@ def is_scam_msg(message: discord.Message) -> bool:
     has_attachment = len(message.attachments) > 0 or len(message.embeds) > 0
     has_mention = len(message.mentions) > 0
 
-    # 🔴 রুল ১: মেসেজের যেকোনো জায়গায় 'bro' বা 'BRO' থাকলেই ডিলিট
+    
     if re.search(r'\bbro\b', content_lower):
         return True
 
-    # 🔴 রুল ২: মেসেজে ছবি আছে এবং সাথে কাউকে মেনশন (@ping) করেছে
+    
     if has_attachment and has_mention:
         return True
 
-    # 🔴 রুল ৩: 'Untitled' অ্যাটাক (রিনেম না করা ২টি বা তার বেশি স্ক্রিনশট)
-    # হ্যাকাররা স্ক্রিনশট রিনেম করে না। একসাথে ২টি বা তার বেশি 'Untitled' আপলোড হলেই ডিলিট।
+ 
     untitled_images = sum(1 for a in message.attachments if a.filename and "untitled" in a.filename.lower())
     if untitled_images >= 2:
         return True
 
-    # 🔴 রুল ৪: হ্যাকারের ইমেজ ব্লাস্ট (৩টি বা তার বেশি ফাঁকা বা হিজিবিজি ছবি)
-    # আপনি নরমালি ১-২টা ছবি পাঠালে ডিলিট হবে না। কিন্তু হ্যাকার যখন ৩-৪টা স্ক্যাম ছবি একসাথে মারে...
+ 
     if len(message.attachments) >= 3:
         words = content_lower.split()
-        # যদি হ্যাকার "meptluwx" টাইপ হিজিবিজি লিখে...
+        
         if len(words) == 1 and bool(GIBBERISH_RE.match(words[0])):
             vowels = sum(1 for char in words[0] if char in 'aeiou')
             if vowels == 0 or (len(words[0]) / (vowels + 1) > 4.0):
                 return True
-        # অথবা হ্যাকার যদি কোনো টেক্সট ছাড়াই ৩-৪টা ছবি একসাথে ব্লাস্ট করে...
+       
         if len(words) == 0:
             return True
 
-    # 🔴 রুল ৫: ক্রিপ্টো কি-ওয়ার্ড + লিংক
     has_link = bool(LINK_RE.search(content_lower)) or bool(MARKDOWN_LINK_RE.search(content_lower))
     for word in SCAM_KEYWORDS:
         if re.search(r'\b' + re.escape(word) + r'\b', content_lower):
