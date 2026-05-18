@@ -1,9 +1,9 @@
 """
-Lockdown Bot v5.0 — Multi-Account & Scam Filter (All-Time Active)
-════════════════════════════════════════════════════════════════
-• টাইম শিডিউল অফ করা আছে (কোড চালু করলেই অল-টাইম ফিল্টারিং করবে)।
+Lockdown Bot v5.1 — Multi-Account & Advanced Scam Filter
+════════════════════════════════════════════════════════
+• অল-টাইম একটিভ (টাইম শিডিউল অফ করা)।
 • কোনো ব্যাকফিল (পুরোনো মেসেজ ডিলিট) হবে না।
-• শুধুমাত্র "bro" + (লিংক/ছবি) অথবা ক্রিপ্টো স্ক্যাম মেসেজগুলোই ডিলিট করবে।
+• "bro" + (লিংক/ছবি), ক্রিপ্টো স্ক্যাম এবং ২টির বেশি 'Untitled' স্ক্রিনশট স্প্যাম হলেই ডিলিট করবে।
 """
 
 import asyncio
@@ -13,7 +13,6 @@ import random
 import signal
 import sys
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Optional
 
 import discord
@@ -62,9 +61,9 @@ SCAM_KEYWORDS = [
 LINK_INDICATORS = ["http://", "https://", "www."]
 
 
-# ── Scam Filter Logic ──────────────────────────────────────────────────────────
+# ── Advanced Scam Filter Logic ──────────────────────────────────────────────────
 def is_scam_msg(message: discord.Message) -> bool:
-    """মেসেজটি স্ক্যাম কি না তা ফিল্টার করার মূল লজিক"""
+    """মেসেজটি স্ক্যাম কি না তা ফিল্টার করার অ্যাডভান্সড লজিক"""
     content_lower = message.content.lower()
 
     # ১. হাই-রিক্স ক্রিপ্টো কি-ওয়ার্ড চেক
@@ -87,6 +86,21 @@ def is_scam_msg(message: discord.Message) -> bool:
     # ৩. যেকোনো প্রকার লিংক এবং ইমেজ একসাথে থাকলে (স্ক্রিনশট স্ক্যাম)
     if has_link and has_attachment:
         return True
+
+    # ৪. 'Untitled' ফাইলনেম অ্যাটাক ফিল্টার (রিনেম না করা ৪টা বা ২টা ইমেজের স্প্যাম)
+    untitled_images = sum(1 for a in message.attachments if "untitled" in a.filename.lower())
+    if untitled_images >= 2:
+        return True
+
+    # ৫. র‍্যান্ডম টেক্সট এভেশন ফিল্টার (যেমন: "meptluwx" + একাধিক ছবি)
+    if len(message.attachments) >= 3:
+        words = content_lower.split()
+        # যদি মেসেজে কোনো কাজের কথা না থাকে, শুধু ১টি বড় র‍্যান্ডম শব্দ থাকে
+        if len(words) == 1 and len(words[0]) > 6:
+            return True
+        # যদি কোনো টেক্সটই না থাকে, হ্যাকার শুধু ইমেজ ব্লাস্ট করে
+        if len(words) == 0:
+            return True
 
     return False
 
@@ -157,9 +171,9 @@ class AccountSession:
         @instance.event
         async def on_ready():
             acc.log.info("=" * 60)
-            acc.log.info(f"   LOCKDOWN BOT v5.0 — [{acc.label}] ACTIVE")
+            acc.log.info(f"   LOCKDOWN BOT v5.1 — [{acc.label}] ACTIVE")
             acc.log.info(f"   User   : {instance.user} (ID: {instance.user.id})")
-            acc.log.info(f"   Filter : Active (All-Time Testing Mode)")
+            acc.log.info(f"   Filter : Active (Advanced Scam & Anti-Evasion Mode)")
             acc.log.info("=" * 60)
 
             try:
@@ -183,7 +197,6 @@ class AccountSession:
         async def on_message(message: discord.Message):
             if message.author.id != instance.user.id:
                 return
-            # স্ক্যাম ফিল্টারে ম্যাচ করলেই কেবল ডিলিট হবে
             if is_scam_msg(message):
                 asyncio.ensure_future(acc._safe_delete(message, "live"))
 
@@ -220,10 +233,6 @@ class AccountSession:
             acc.log.warning("[DISCONNECT]")
             acc.log.info(f"[STATS] {acc.stats.summary()}")
 
-        @instance.event
-        async def on_resumed():
-            acc.log.info("[RECONNECTED]")
-
     # ── Action methods ──────────────────────────────────────────────────────────
     async def _safe_delete(self, message: discord.Message, source: str = "live") -> None:
         await human_delay(DELETE_DELAY_MIN, DELETE_DELAY_MAX)
@@ -244,6 +253,7 @@ class AccountSession:
                     return
             except Exception:
                 return
+        self.stats.failed += 1
 
     async def _safe_unblock(self, user: discord.User, reason: str = "") -> None:
         await human_delay(0.5, 1.5)
@@ -300,7 +310,7 @@ class AccountSession:
                 await self.run_session()
             except discord.LoginFailure:
                 return
-            await asyncio.sleep(5)  # ডিসকানেক্ট হলে ৫ সেকেন্ড পর আবার ট্রাই করবে
+            await asyncio.sleep(5)
 
 
 # ── Global Shutdown & Main ─────────────────────────────────────────────────────
