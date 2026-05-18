@@ -132,8 +132,8 @@ class AccountSession:
         self.log    = logging.getLogger(label)
         self._bot: Optional[commands.Bot] = None
         self._running_tasks: set[asyncio.Task] = set()
-        self.is_stopped = False  # 🟢 নতুন ফ্ল্যাগ: বট স্টপ রিকোয়েস্ট ট্র্যাক করার জন্য
-        self.loop = None         # 🟢 নতুন ভেরিয়েবল: বটের রানিং ইভেন্ট লুপ সেভ রাখার জন্য
+        self.is_stopped = False  
+        self.loop = None         
 
     def _make_bot(self) -> commands.Bot:
         instance = commands.Bot(command_prefix="\x00", self_bot=True, status=discord.Status.invisible, activity=None)
@@ -245,9 +245,9 @@ class AccountSession:
 
     async def run_forever(self) -> None:
         self.log.info(f"Thread initialized.")
-        self.loop = asyncio.get_running_loop()  # 🟢 বর্তমান থ্রেডের অ্যাক্টিভ লুপ সেভ রাখা হচ্ছে
+        self.loop = asyncio.get_running_loop()  
         
-        while not self.is_stopped:              # 🟢 স্টপ ফ্ল্যাগ ট্রু হলে লুপ ব্রেক করবে
+        while not self.is_stopped:              
             bot = self._make_bot()
             self._bot = bot
             try:
@@ -267,26 +267,30 @@ class AccountSession:
 
 
 # ── API Integration (Called by server.py) ──────────────────────────────────────
-active_bots = {}  # 🟢 টোকেন অনুযায়ী সেশন অবজেক্ট ট্র্যাক করার জন্য গ্লোবাল ডিকশনারি
+active_bots = {}  
 
-async def start_async_bots(tokens: list[str]):
-    """এই ফাংশনটি server.py থেকে টোকেন রিসিভ করে বট চালু করবে"""
+# 🟢 এখানে 'username' প্যারামিটার যুক্ত করা হয়েছে যেন server.py থেকে আসা রিকোয়েস্ট ক্র্যাশ না করে
+async def start_async_bots(tokens: list[str], username: str = None):
+    """এই ফাংশনটি server.py থেকে টোকেন এবং ইউজারনেম রিসিভ করে বট চালু করবে"""
     global active_bots
     new_sessions = []
     
     for tok in tokens:
         if tok in active_bots:
             continue
-        label = f"ACC-{len(active_bots) + 1}"
+        
+        # 🟢 ইউজারনেম থাকলে সেটি লগের লেবেল হবে, না থাকলে ডিফল্ট ACC-X হবে
+        label = username if username else f"ACC-{len(active_bots) + 1}"
+        
         session = AccountSession(token=tok, label=label)
-        active_bots[tok] = session  # ডিকশনারিতে সেশন স্টোর করা হচ্ছে
+        active_bots[tok] = session  
         new_sessions.append(session)
     
     if new_sessions:
-        root_log.info(f"[LAUNCHER] Spawning {len(new_sessions)} new security threads.")
+        root_log.info(f"[LAUNCHER] Spawning {len(new_sessions)} new security threads for {username or 'Saved Tokens'}.")
         await asyncio.gather(*[s.run_forever() for s in new_sessions], return_exceptions=True)
 
-# (লোকাল পিসিতে টেস্ট করার জন্য)
+
 # (লোকাল পিসিতে টেস্ট করার জন্য)
 if __name__ == "__main__":
     import os
@@ -295,6 +299,6 @@ if __name__ == "__main__":
     test_token = os.getenv("DISCORD_TOKEN")
     if test_token:
         try: 
-            asyncio.run(start_async_bots([test_token]))
+            asyncio.run(start_async_bots([test_token], username="Samir-PC"))
         except KeyboardInterrupt: 
             pass
