@@ -7,7 +7,7 @@ import lockdown_final
 
 app = Flask(__name__)
 
-# 🔒 আপনার নতুন গোপন পাসওয়ার্ড
+# 🔒 গোপন পাসওয়ার্ড
 SECRET_PASSWORD = "Jihad_Shield_Secure_Pass_2026"
 
 # 📁 Railway Volume-এর মাউন্ট পাথ অনুযায়ী JSON ফাইলের লোকেশন
@@ -15,7 +15,7 @@ VOLUME_DIR = "/data"
 TOKEN_FILE = os.path.join(VOLUME_DIR, "tokens.json")
 
 def run_bot_in_background(token, username):
-    """নির্দিষ্ট একটি টোকেন ও ইউজারনেমের জন্য ব্যাকগ্রাউন্ডে আইসোলেটেড লুপে বট স্টার্ট করবে"""
+    """নির্দিষ্ট একটি টোকেন ও ইউজারনেমের জন্য ব্যাকগ্রাউন্ডে বট স্টার্ট করবে"""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
@@ -70,7 +70,6 @@ def remove_token_from_file(identifier):
             
     return []
 
-# 🟢 ১. নতুন গোপন অ্যাড লিংক (Jihad Name Updated)
 @app.route('/start-shield-secure-jihad-99x', methods=['POST'])
 def start_shield():
     data = request.json
@@ -88,7 +87,6 @@ def start_shield():
     threading.Thread(target=run_bot_in_background, args=(token, username), daemon=True).start()
     return jsonify({"message": f"Token saved & Shield Activated for {username}!"}), 200
 
-# 🛑 ২. নতুন গোপন রিমুভ লিংক (Jihad Name Updated)
 @app.route('/stop-shield-secure-jihad-99x', methods=['POST'])
 def stop_shield():
     data = request.json
