@@ -1,2 +1,4 @@
-discord.py-self==2.1.0
+flask
+discord.py-self
 python-dotenv
+requests
