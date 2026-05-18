@@ -287,11 +287,14 @@ async def start_async_bots(tokens: list[str]):
         await asyncio.gather(*[s.run_forever() for s in new_sessions], return_exceptions=True)
 
 # (লোকাল পিসিতে টেস্ট করার জন্য)
+# (লোকাল পিসিতে টেস্ট করার জন্য)
 if __name__ == "__main__":
     import os
     from dotenv import load_dotenv
     load_dotenv()
     test_token = os.getenv("DISCORD_TOKEN")
     if test_token:
-        try: asyncio.run(start_async_bots([test_token]))
-    except KeyboardInterrupt: pass
+        try: 
+            asyncio.run(start_async_bots([test_token]))
+        except KeyboardInterrupt: 
+            pass
