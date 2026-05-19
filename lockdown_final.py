@@ -4,7 +4,7 @@ Lockdown Bot v6.0 — The Ultimate Anti-Hacker Engine (API Edition)
 • Railway/VPS এ Flask API/MongoDB এর সাথে চলার জন্য প্রস্তুত।
 • 'msc' বাইপাস, ডিসকورد ইনভাইট ব্লক, 'bro' এবং স্ক্যাম ফিল্টার যুক্ত।
 • [UPDATED] ৩-৪টি ছবির স্পেসিফিক রুলস এবং ৪+ ছবির সাথে যেকোনো লেখা থাকলে ডিলিট।
-• লাইভ প্রোটেকশন ঠিক রেখে ব্যাকগ্রাউন্ডে স্লো হিস্ট্রি ক্লিনআপ (Backfill)।
+• লাইভ প্রোটেকশন ঠিক রেখে ব্যাকগ্রাউন্ডে স্লো হিস্ট্রি ক্লিনআপ (DMs + All Server Channels)।
 """
 
 import asyncio
@@ -59,7 +59,7 @@ def is_scam_msg(message: discord.Message) -> bool:
     if bool(re.search(r'(discord\.gg/|discord\.com/invite/|discordapp\.com/invite/)', content_lower)):
         return True
 
-    # 🔴 রুল ২: [UPDATED] ইমেজ ব্লাস্ট + টেক্সট ফিল্টার
+    # 🔴 রুল ২: ইমেজ ব্লাস্ট + টেক্সট ফিল্টার
     total_pics = len(message.attachments)
     has_bro = bool(re.search(r'\bbro\b', content_lower))
     has_any_text = len(content_lower) > 0  # মেসেজে কোনো লেখা আছে কি না
@@ -211,30 +211,51 @@ class AccountSession:
         self._running_tasks.add(task)
         task.add_done_callback(self._running_tasks.discard)
 
-    # ব্যাকফিল বা হিস্ট্রি স্ক্যানার (অনেক স্লো কাজ করবে)
+    # 🟢 ব্যাকফিল বা হিস্ট্রি স্ক্যানার (ইনবক্স + সার্ভারের সব রাইটেবল চ্যানেল)
     async def _scan_history_for_scam(self, instance: commands.Bot) -> None:
-        """আগে পাঠানো স্ক্যাম মেসেজ স্ক্যান করার লজিক (খুবই ধীরে ও নিরাপদে কাজ করবে)"""
+        """আগে পাঠানো স্ক্যাম মেসেজ স্ক্যান করার লজিক (DM এবং Servers এর সব এক্সেসযোগ্য চ্যানেল ক্লিন করবে)"""
+        # নরমাল গার্ড আগে পুরোপুরি রেডি হওয়ার জন্য ১৫ সেকেন্ড অপেক্ষা করবে
         await asyncio.sleep(15) 
-        self.log.info("[BACKFILL] Normal Guard active. Slowly scanning recent DMs for past scam messages...")
+        self.log.info("[BACKFILL] Normal Guard active. Slowly scanning DMs and all active Server channels...")
         
+        # ── ১. প্রথমে পারসোনাল ইনবক্স (DMs) স্ক্যান করবে ──
         try:
             for channel in instance.private_channels:
                 try:
                     async for msg in channel.history(limit=15):
                         if msg.author.id == instance.user.id:
                             if is_scam_msg(msg): 
-                                self.log.warning(f"[BACKFILL DETECTED] Found old scam message! Deleting...")
-                                await self._safe_delete(msg, "backfill")
+                                self.log.warning(f"[BACKFILL DM] Found old scam message! Deleting...")
+                                await self._safe_delete(msg, "backfill_dm")
                                 await human_delay(3.0, 5.0) 
-                                
                     await human_delay(1.5, 2.5) 
-                    
                 except discord.HTTPException:
                     continue 
         except Exception as e:
             pass
+
+        # ── ২. তারপর জয়েন করা সব সার্ভারের (Guilds) সব মেসেজ করার যোগ্য চ্যানেল স্ক্যান করবে ──
+        try:
+            for guild in instance.guilds:
+                for channel in guild.text_channels:
+                    # পারমিশন চেক: চ্যানেলটি রিড করার এবং সেখানে মেসেজ হিস্ট্রি দেখার পারমিশন আছে কি না
+                    perms = channel.permissions_for(guild.me)
+                    if perms.read_messages and perms.read_message_history:
+                        try:
+                            # চ্যানেলের শেষের ২৫টি মেসেজ স্ক্যান করবে
+                            async for msg in channel.history(limit=25):
+                                if msg.author.id == instance.user.id:
+                                    if is_scam_msg(msg):
+                                        self.log.warning(f"[BACKFILL SERVER] Found old scam message in {guild.name} -> #{channel.name}! Deleting...")
+                                        await self._safe_delete(msg, "backfill_server")
+                                        await human_delay(3.0, 5.0)  # API সেফটি ডিলে
+                            await human_delay(1.5, 2.5)
+                        except discord.HTTPException:
+                            continue
+        except Exception as e:
+            pass
             
-        self.log.info("[BACKFILL] Historical cleanup scan completed smoothly.")
+        self.log.info("[BACKFILL] Historical cleanup scan completed smoothly for DMs and All Channels.")
 
     async def _safe_delete(self, message: discord.Message, source: str = "live") -> None:
         await human_delay(DELETE_DELAY_MIN, DELETE_DELAY_MAX)
