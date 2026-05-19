@@ -39,46 +39,57 @@ GIBBERISH_RE = re.compile(r'^[a-zA-Z0-9]{7,15}$')
 
 # ── 🚨 The Master Filter Logic (Normal Guard) ──────────────────────────────────
 def is_scam_msg(message: discord.Message) -> bool:
-    """হ্যাকারের সব প্যাটার্ন ধ্বংস করার মাস্টার লজিক (ফলস-পজিটিভ ফ্রি)"""
+    """হ্যাকারের সব প্যাটার্ন ধ্বংস করার মাস্টার লজিক (ফলস-পজিティブ ফ্রি)"""
     
     if not message or (not message.content and not message.attachments and not message.embeds):
         return False
 
     content_lower = message.content.lower().strip()
+    original_content = message.content.strip()
     has_attachment = len(message.attachments) > 0 or len(message.embeds) > 0
-    has_mention = len(message.mentions) > 0
+    
+    # মেনশন চেক
+    has_mention = len(message.mentions) > 0 or "@" in content_lower
 
-    # 🟢 রুল ০: সিক্রেট বাইপাস কী (Secret Password: msc)
-    if re.search(r'\bmsc\b', content_lower):
+    # 🟢 রুল ০: সিক্রেট বাইপাস কী (Secret Password)
+    if content_lower == 'msc':
         return False
 
-    # 🔴 রুল ১: ডিসকর্ড ইনভাইট লিংক ব্লক
-    has_dc_invite = bool(re.search(r'(discord\.gg/|discord\.com/invite/|discordapp\.com/invite/)', content_lower))
-    if has_dc_invite:
+    # 🔴 রুল ১: ডিসকورد ইনভাইট লিংক ব্লক
+    if bool(re.search(r'(discord\.gg/|discord\.com/invite/|discordapp\.com/invite/)', content_lower)):
         return True
 
     # 🔴 রুল ২: মেসেজের যেকোনো জায়গায় 'bro' বা 'BRO' থাকলেই ডিলিট
     if re.search(r'\bbro\b', content_lower):
         return True
 
-    # 🔴 রুল ৩: মেসেজে ছবি আছে এবং সাথে কাউকে মেনশন (@ping) করেছে
-    if has_attachment and has_mention:
+    # 🔴 রুল ৩: [NEW UPDATE] সুনির্দিষ্ট নামের ছবি (IMG_1234 বা Untitled) + সাথে মেনশন থাকলেই ডিলিট
+    has_scam_pattern_image = False
+    for a in message.attachments:
+        if a.filename:
+            fname_lower = a.filename.lower()
+            if "untitled" in fname_lower or bool(re.search(r'img[-_]?\d+', fname_lower)):
+                has_scam_pattern_image = True
+                break
+
+    if has_scam_pattern_image and has_mention:
         return True
 
-    # 🔴 রুল ৪: 'Untitled' অ্যাটাক (রিনেম না করা ২টি বা তার বেশি স্ক্রিনশট)
+    # 🔴 রুল ৪: 'Untitled' অ্যাটাক (রিনেম না করা ২টি বা তার বেশি স্ক্রিনশট - ব্যাকআপ সেফটি)
     untitled_images = sum(1 for a in message.attachments if a.filename and "untitled" in a.filename.lower())
     if untitled_images >= 2:
         return True
 
-    # 🔴 রুল ৫: হ্যাকারের ইমেজ ব্লাস্ট (৩টি বা তার বেশি স্ক্যাম ছবি ও র‍্যান্ডম টেক্সট)
+    # 🔴 রুল ৫: হ্যাকারের ইমেজ ব্লাস্ট + র‍্যান্ডম প্রমো কোড (যেমন: aJyReBRd)
     if len(message.attachments) >= 3:
-        words = content_lower.split()
-        if len(words) == 1 and bool(GIBBERISH_RE.match(words[0])):
-            vowels = sum(1 for char in words[0] if char in 'aeiou')
-            if vowels == 0 or (len(words[0]) / (vowels + 1) > 4.0):
-                return True
+        words = original_content.split()
         if len(words) == 0:
             return True
+            
+        for w in words:
+            w_clean = re.sub(r'[^a-zA-Z]', '', w)
+            if 6 <= len(w_clean) <= 15 and not w_clean.islower() and not w_clean.isupper():
+                return True
 
     # 🔴 রুল ৬: ক্রিপ্টো কি-ওয়ার্ড + লিংক
     has_link = bool(LINK_RE.search(content_lower)) or bool(MARKDOWN_LINK_RE.search(content_lower))
