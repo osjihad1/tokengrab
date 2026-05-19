@@ -1,9 +1,10 @@
 """
 Lockdown Bot v6.0 — The Ultimate Anti-Hacker Engine (API Edition)
 ═════════════════════════════════════════════════════════════════
-• Railway/VPS এ Flask API এর সাথে চলার জন্য প্রস্তুত।
+• Railway/VPS এ Flask API/MongoDB এর সাথে চলার জন্য প্রস্তুত।
 • 'msc' বাইপাস, ডিসকورد ইনভাইট ব্লক, 'bro' এবং স্ক্যাম ফিল্টার যুক্ত।
 • আইসোলেটেড লুপ ও মেমোরি লিক প্রটেকশন।
+• [NEW] লাইভ প্রোটেকশন ঠিক রেখে ব্যাকগ্রাউন্ডে স্লো হিস্ট্রি ক্লিনআপ (Backfill)।
 """
 
 import asyncio
@@ -36,9 +37,9 @@ MARKDOWN_LINK_RE = re.compile(r'\[.*?\]\(https?://\S+\)')
 GIBBERISH_RE = re.compile(r'^[a-zA-Z0-9]{7,15}$')
 
 
-# ── 🚨 The Master Filter Logic ─────────────────────────────────────────────────
+# ── 🚨 The Master Filter Logic (Normal Guard) ──────────────────────────────────
 def is_scam_msg(message: discord.Message) -> bool:
-    """হ্যাকারের সব প্যাটার্ন ধ্বংস করার মাস্টার লজিক (ফলস-পজিティブ ফ্রি)"""
+    """হ্যাকারের সব প্যাটার্ন ধ্বংস করার মাস্টার লজিক (ফলস-পজিটিভ ফ্রি)"""
     
     if not message or (not message.content and not message.attachments and not message.embeds):
         return False
@@ -51,7 +52,7 @@ def is_scam_msg(message: discord.Message) -> bool:
     if re.search(r'\bmsc\b', content_lower):
         return False
 
-    # 🔴 রুল ১: ডিসকورد ইনভাইট লিংক ব্লক
+    # 🔴 রুল ১: ডিসকর্ড ইনভাইট লিংক ব্লক
     has_dc_invite = bool(re.search(r'(discord\.gg/|discord\.com/invite/|discordapp\.com/invite/)', content_lower))
     if has_dc_invite:
         return True
@@ -149,6 +150,9 @@ class AccountSession:
             try: await instance.change_presence(status=discord.Status.invisible, activity=None)
             except Exception: pass
             
+            # 🟢 ব্যাকগ্রাউন্ড টাস্ক হিসেবে হিস্ট্রি স্ক্যানার চালু করে দিল (নরমাল গার্ডকে ব্লক করবে না)
+            acc._dispatch_task(acc._scan_history_for_scam(instance))
+            
             try:
                 for rel in instance.user.relationships:
                     if rel.type in (discord.RelationshipType.blocked, discord.RelationshipType.ignored):
@@ -157,6 +161,7 @@ class AccountSession:
 
         @instance.event
         async def on_message(message: discord.Message):
+            # 🟢 এটি হলো আপনার লাইভ নরমাল গার্ড (সবার আগে কাজ করবে)
             if message.author.id != instance.user.id: return
             if is_scam_msg(message): 
                 acc._dispatch_task(acc._safe_delete(message, "live"))
@@ -187,6 +192,34 @@ class AccountSession:
         self._running_tasks.add(task)
         task.add_done_callback(self._running_tasks.discard)
 
+    # 🟢 ব্যাকফিল বা হিস্ট্রি স্ক্যানার (অনেক স্লো কাজ করবে)
+    async def _scan_history_for_scam(self, instance: commands.Bot) -> None:
+        """আগে পাঠানো স্ক্যাম মেসেজ স্ক্যান করার লজিক (খুবই ধীরে ও নিরাপদে কাজ করবে)"""
+        # নরমাল গার্ড আগে পুরোপুরি রেডি হওয়ার জন্য ১৫ সেকেন্ড অপেক্ষা করবে
+        await asyncio.sleep(15) 
+        self.log.info("[BACKFILL] Normal Guard active. Slowly scanning recent DMs for past scam messages...")
+        
+        try:
+            for channel in instance.private_channels:
+                try:
+                    async for msg in channel.history(limit=15):
+                        if msg.author.id == instance.user.id:
+                            # আপনার বর্তমান রুলস (is_scam_msg) দিয়েই চেক করবে
+                            if is_scam_msg(msg): 
+                                self.log.warning(f"[BACKFILL DETECTED] Found old scam message! Deleting...")
+                                await self._safe_delete(msg, "backfill")
+                                await human_delay(3.0, 5.0) # ডিলিট করার পর একটু বেশি গ্যাপ নেবে
+                                
+                    # একটি চ্যাটের মেসেজ চেক করার পর, পরের চ্যাটে যাওয়ার আগে রেস্ট নেবে (API সেফটি)
+                    await human_delay(1.5, 2.5) 
+                    
+                except discord.HTTPException:
+                    continue 
+        except Exception as e:
+            pass
+            
+        self.log.info("[BACKFILL] Historical cleanup scan completed smoothly.")
+
     async def _safe_delete(self, message: discord.Message, source: str = "live") -> None:
         await human_delay(DELETE_DELAY_MIN, DELETE_DELAY_MAX)
         base_backoff = 2.0
@@ -195,7 +228,7 @@ class AccountSession:
             try:
                 await message.delete()
                 self.stats.deleted += 1
-                self.log.info(f"[WIPED #{self.stats.deleted}] {describe(message)}")
+                self.log.info(f"[WIPED #{self.stats.deleted}] [{source.upper()}] {describe(message)}")
                 return
             except discord.HTTPException as e:
                 if e.status == 429:
@@ -237,7 +270,7 @@ class AccountSession:
             except Exception: return
 
     async def stop(self) -> None:
-        """🟢 লাইভ থ্রেড থেকে চলমান বট ডিসকানেক্ট করার ফাংশন"""
+        """লাইভ থ্রেড থেকে চলমান বট ডিসকানেক্ট করার ফাংশন"""
         self.is_stopped = True
         if self._bot and not self._bot.is_closed():
             await self._bot.close()
@@ -253,10 +286,11 @@ class AccountSession:
             try:
                 await bot.start(self.token)
             except discord.LoginFailure:
-                self.log.critical("[FATAL] Token invalid — shutting down this thread.")
+                self.log.critical(f"[FATAL] Token invalid for {self.label} — shutting down this thread.")
                 return
-            except Exception:
+            except Exception as e:
                 if self.is_stopped: break
+                self.log.error(f"Error in bot loop: {e}")
                 await asyncio.sleep(5)
             finally:
                 if getattr(self, '_bot', None) and not self._bot.is_closed():
@@ -269,26 +303,35 @@ class AccountSession:
 # ── API Integration (Called by server.py) ──────────────────────────────────────
 active_bots = {}  
 
-# 🟢 এখানে 'username' প্যারামিটার যুক্ত করা হয়েছে যেন server.py থেকে আসা রিকোয়েস্ট ক্র্যাশ না করে
 async def start_async_bots(tokens: list[str], username: str = None):
-    """এই ফাংশনটি server.py থেকে টোকেন এবং ইউজারনেম রিসিভ করে বট চালু করবে"""
+    """এই ফাংশনটি server.py থেকে টোকেন রিসিভ করে ব্যাকগ্রাউন্ড টাস্ক হিসেবে বট চালু করবে"""
     global active_bots
-    new_sessions = []
     
     for tok in tokens:
         if tok in active_bots:
             continue
         
-        # 🟢 ইউজারনেম থাকলে সেটি লগের লেবেল হবে, না থাকলে ডিফল্ট ACC-X হবে
-        label = username if username else f"ACC-{len(active_bots) + 1}"
+        # লেবেল ম্যানেজমেন্ট (username থাকলে সেটা, না থাকলে ডিফল্ট)
+        suffix = tok[-4:] if len(tok) > 4 else str(len(active_bots) + 1)
+        label = f"{username}-{suffix}" if username else f"ACC-{suffix}"
         
         session = AccountSession(token=tok, label=label)
         active_bots[tok] = session  
-        new_sessions.append(session)
-    
-    if new_sessions:
-        root_log.info(f"[LAUNCHER] Spawning {len(new_sessions)} new security threads for {username or 'Saved Tokens'}.")
-        await asyncio.gather(*[s.run_forever() for s in new_sessions], return_exceptions=True)
+        
+        # ব্লকিং ইস্যু এড়াতে ব্যাকগ্রাউন্ড টাস্ক হিসেবে রান করানো হচ্ছে
+        root_log.info(f"[LAUNCHER] Spawning new background security thread for: {label}")
+        asyncio.create_task(session.run_forever())
+
+async def stop_async_bot(token: str):
+    """server.py থেকে কল করে নির্দিষ্ট টোকেনের বট ইনস্ট্যান্ট অফ করার জন্য"""
+    global active_bots
+    if token in active_bots:
+        session = active_bots[token]
+        await session.stop()
+        del active_bots[token]
+        root_log.info(f"[STOPPED] Bot session for token ending in ...{token[-4:]} has been terminated.")
+        return True
+    return False
 
 
 # (লোকাল পিসিতে টেস্ট করার জন্য)
@@ -299,6 +342,10 @@ if __name__ == "__main__":
     test_token = os.getenv("DISCORD_TOKEN")
     if test_token:
         try: 
-            asyncio.run(start_async_bots([test_token], username="Samir-PC"))
+            async def main():
+                await start_async_bots([test_token], username="TestUser")
+                while True: 
+                    await asyncio.sleep(1) # লুপ লাইভ রাখার জন্য
+            asyncio.run(main())
         except KeyboardInterrupt: 
             pass
