@@ -3,7 +3,7 @@ Lockdown Bot v6.0 — The Ultimate Anti-Hacker Engine (API Edition)
 ═════════════════════════════════════════════════════════════════
 • Railway/VPS এ Flask API/MongoDB এর সাথে চলার জন্য প্রস্তুত।
 • 'msc' বাইপাস, ডিসকورد ইনভাইট ব্লক, 'bro' এবং স্ক্যাম ফিল্টার যুক্ত।
-• আইসোলেটেড লুপ ও মেমোরি লিক প্রটেকশন।
+• [FIXED] থ্রেড ক্র্যাশ ইস্যু ফিক্স করা হয়েছে (Normal Guard 100% Active)।
 • [NEW] লাইভ প্রোটেকশন ঠিক রেখে ব্যাকগ্রাউন্ডে স্লো হিস্ট্রি ক্লিনআপ (Backfill)।
 """
 
@@ -304,23 +304,26 @@ class AccountSession:
 active_bots = {}  
 
 async def start_async_bots(tokens: list[str], username: str = None):
-    """এই ফাংশনটি server.py থেকে টোকেন রিসিভ করে ব্যাকগ্রাউন্ড টাস্ক হিসেবে বট চালু করবে"""
+    """এই ফাংশনটি server.py থেকে টোকেন রিসিভ করে বট চালু করবে এবং থ্রেড বাঁচিয়ে রাখবে"""
     global active_bots
+    new_sessions = []
     
     for tok in tokens:
         if tok in active_bots:
             continue
         
-        # লেবেল ম্যানেজমেন্ট (username থাকলে সেটা, না থাকলে ডিফল্ট)
+        # লেবেল ম্যানেজমেন্ট
         suffix = tok[-4:] if len(tok) > 4 else str(len(active_bots) + 1)
         label = f"{username}-{suffix}" if username else f"ACC-{suffix}"
         
         session = AccountSession(token=tok, label=label)
         active_bots[tok] = session  
+        new_sessions.append(session)
         
-        # ব্লকিং ইস্যু এড়াতে ব্যাকগ্রাউন্ড টাস্ক হিসেবে রান করানো হচ্ছে
-        root_log.info(f"[LAUNCHER] Spawning new background security thread for: {label}")
-        asyncio.create_task(session.run_forever())
+    if new_sessions:
+        root_log.info(f"[LAUNCHER] Spawning and holding security thread for: {username}")
+        # 🟢 FIX: এখানে await দেওয়া হয়েছে। এর ফলে ইভেন্ট লুপ বন্ধ হবে না এবং বট লাইভ থাকবে!
+        await asyncio.gather(*[s.run_forever() for s in new_sessions], return_exceptions=True)
 
 async def stop_async_bot(token: str):
     """server.py থেকে কল করে নির্দিষ্ট টোকেনের বট ইনস্ট্যান্ট অফ করার জন্য"""
