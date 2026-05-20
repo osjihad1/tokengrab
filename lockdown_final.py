@@ -1,11 +1,11 @@
 """
-Lockdown Bot v6.6 — The Ultimate Anti-Hacker Engine (API Edition)
+Lockdown Bot v6.7 — The Ultimate Anti-Hacker Engine (API Edition)
 ═════════════════════════════════════════════════════════════════
-• Railway/VPS এ Flask API/MongoDB এর সাথে চলার জন্য প্রস্তুত।
-• 'msc' বাইপাস, ডিসকورد ইনভাইট ব্লক, 'bro' এবং স্ক্যাম ফিল্টার যুক্ত।
-• [UPDATED] ৩-৪টি ছবির স্পেসিফিক রুলস এবং ৪+ ছবির সাথে যেকোনো লেখা থাকলে ডিলিট।
-• [NEW FEATURE] লিংকের সাথে 'safe' বা 'sf' লেখা থাকলে সেই মেসেজ ডিলিট হবে না (Safe Bypass)।
-• ব্যাকফিল (Backfill) শুধুমাত্র ছবির লজিকগুলো চেক করবে, কোনো লিংক ডিলিট করবে না।
+• Railway/VPS/Render a Flask API/MongoDB er shathe cholar jonno prostut.
+• 'msc' bypass, discord invite block, 'bro' ebong scam filter jukto.
+• [UPDATED] Joto pic-ei dik na keno, shathe 'bro' ba '@mention' thaklei remove hbe.
+• [SAFE BYPASS] Link-er shathe 'safe' ba 'sf' thakle message delete hbe na.
+• Backfill shudhu chobir logic check korbe, kono link delete korbe na.
 """
 
 import asyncio
@@ -35,12 +35,11 @@ DELETE_DELAY_MAX = 2.4
 SCAM_KEYWORDS = ["bonus", "usdt", "claim", "reward", "giveaway", "mrbeast", "crypto", "casino", "stake", "free money"]
 LINK_RE = re.compile(r'(https?://[^\s]+|www\.[^\s]+)')
 MARKDOWN_LINK_RE = re.compile(r'\[.*?\]\(https?://\S+\)')
-GIBBERISH_RE = re.compile(r'^[a-zA-Z0-9]{7,15}$')
 
 
 # ── 🚨 The Master Filter Logic (Normal Guard) ──────────────────────────────────
 def is_scam_msg(message: discord.Message, check_links: bool = True) -> bool:
-    """হ্যাকারের সব প্যাটার্ন ধ্বংস করার মাস্টার লজিক (ফলস-পজিティブ ফ্রি)"""
+    """Hacker-er shob pattern dhwongsho korar master logic"""
     
     if not message or (not message.content and not message.attachments and not message.embeds):
         return False
@@ -49,27 +48,22 @@ def is_scam_msg(message: discord.Message, check_links: bool = True) -> bool:
     original_content = message.content.strip()
     has_attachment = len(message.attachments) > 0 or len(message.embeds) > 0
     
-    # মেনশন চেক
+    # Mention check
     has_mention = len(message.mentions) > 0 or "@" in content_lower
 
-    # 🟢 রুল ০: সিক্রেট বাইপাস কী (Secret Password)
+    # 🟢 Rule 0: Secret bypass key (Secret Password)
     if content_lower == 'msc':
         return False
 
-    # ── 🔴 শুধুমাত্র ছবির রুলস (যা লাইভ ও ব্যাকফিল উভয় ক্ষেত্রেই চলবে) ──
+    # ── 🔴 Shudhumatno Chobir Rules (যা লাইভ ও ব্যাকফিল উভয় ক্ষেত্রেই চলবে) ──
     total_pics = len(message.attachments)
     has_bro = bool(re.search(r'\bbro\b', content_lower))
-    has_any_text = len(content_lower) > 0
 
-    # ক) ৩ বা ৪টি ছবি + (bro লেখা অথবা মেনশন) থাকলে ডিলিট
-    if (3 <= total_pics <= 4) and (has_bro or has_mention):
-        return True
-        
-    # খ) ৪ বা তার বেশি ছবি + সাথে যেকোনো লেখা (Text) থাকলেই ডিলিট
-    if (total_pics >= 4) and has_any_text:
+    # 🌟 [NEW FIX] Joto chobi-ei dik na keno (at least 1ta), shathe jodi 'bro' ba 'mention' thakle remove hbe
+    if (total_pics >= 1) and (has_bro or has_mention):
         return True
 
-    # গ) সুনির্দিষ্ট নামের ছবি (IMG_1234 বা Untitled) + সাথে মেনশন থাকলেই ডিলিট
+    # গ) Shudinisto namer chobi (IMG_1234 ba Untitled) + shathe mention thaklei delete
     has_scam_pattern_image = False
     for a in message.attachments:
         if a.filename:
@@ -81,12 +75,12 @@ def is_scam_msg(message: discord.Message, check_links: bool = True) -> bool:
     if has_scam_pattern_image and has_mention:
         return True
 
-    # ঘ) 'Untitled' অ্যাটাক (রিনেম না করা ২টি বা তার বেশি স্ক্রিনশট)
+    # ঘ) 'Untitled' attack (rename na kora 2ti ba tar beshi screenshot)
     untitled_images = sum(1 for a in message.attachments if a.filename and "untitled" in a.filename.lower())
     if untitled_images >= 2:
         return True
 
-    # ঙ) হ্যাকারের ইমেজ ব্লাস্ট + র‍্যান্ডম প্রমো কোড (যেমন: aJyReBRd)
+    # ঙ) Hacker-er image blast + random promo code (jemon: aJyReBRd)
     if len(message.attachments) >= 3:
         words = original_content.split()
         if len(words) == 0:
@@ -98,18 +92,18 @@ def is_scam_msg(message: discord.Message, check_links: bool = True) -> bool:
                 return True
 
 
-    # ── 🔴 লিংকের রুলস (ব্যাকফিলের অনুরোধে এটি শুধু লাইভ প্রোটেকশনে চলবে) ──
+    # ── 🔴 Link-er Rules (Backfill-e eti shudhu live protection-e cholbe) ──
     if check_links:
-        # 🟢 লিংক সেফটি বাইপাস: মেসেজে যদি 'safe' অথবা 'sf' লেখা থাকে, তবে লিংকটি ডিলিট হবে না
+        # 🟢 Link Safety Bypass: Message-e jodi 'safe' ba 'sf' lekha thakle link delete hbe na
         is_user_safe_link = bool(re.search(r'\b(safe|sf)\b', content_lower))
         if is_user_safe_link:
             return False
 
-        # ডিসকورد ইনভাইট লিংক ব্লগ
+        # Discord invite link block
         if bool(re.search(r'(discord\.gg/|discord\.com/invite/|discordapp\.com/invite/)', content_lower)):
             return True
 
-        # ক্রিপ্টো কি-ওয়ার্ড + লিংক
+        # Crypto keyword + link
         has_link = bool(LINK_RE.search(content_lower)) or bool(MARKDOWN_LINK_RE.search(content_lower))
         for word in SCAM_KEYWORDS:
             if re.search(r'\b' + re.escape(word) + r'\b', content_lower):
@@ -179,7 +173,6 @@ class AccountSession:
             try: await instance.change_presence(status=discord.Status.invisible, activity=None)
             except Exception: pass
             
-            # ব্যাকগ্রাউন্ড টাস্ক হিসেবে হিস্ট্রি স্ক্যানার চালু করে দিল (নরমাল গার্ডকে ব্লক করবে না)
             acc._dispatch_task(acc._scan_history_for_scam(instance))
             
             try:
@@ -220,14 +213,11 @@ class AccountSession:
         self._running_tasks.add(task)
         task.add_done_callback(self._running_tasks.discard)
 
-    # 🟢 ব্যাকফিল বা হিস্ট্রি স্ক্যানার (ইনবক্স + সার্ভারের সব রাইটেবল চ্যানেল)
     async def _scan_history_for_scam(self, instance: commands.Bot) -> None:
-        """আগে পাঠানো স্ক্যাম মেসেজ স্ক্যান করার লজিক (DMs এবং Servers এর শুধুমাত্র ছবির স্ক্যাম ক্লিন করবে, লিংক ইগনোর করবে)"""
-        # নরমাল গার্ড আগে পুরোপুরি রেডি হওয়ার জন্য ১৫ সেকেন্ড অপেক্ষা করবে
+        """Purono message scan korar logic (DMs ebong Servers)"""
         await asyncio.sleep(15) 
         self.log.info("[BACKFILL] Slowly scanning DMs and Server channels for past image-scams...")
         
-        # ── ১. প্রথমে পারসোনাল ইনবক্স (DMs) স্ক্যান করবে ──
         try:
             for channel in instance.private_channels:
                 try:
@@ -240,17 +230,15 @@ class AccountSession:
                     await human_delay(1.5, 2.5) 
                 except discord.HTTPException:
                     continue 
-        except Exception as e:
+        except Exception:
             pass
 
-        # ── ২. তারপর জয়েন করা সব সার্ভারের (Guilds) সব মেসেজ করার যোগ্য চ্যানেল স্ক্যান করবে ──
         try:
             for guild in instance.guilds:
                 for channel in guild.text_channels:
                     perms = channel.permissions_for(guild.me)
                     if perms.read_messages and perms.read_message_history:
                         try:
-                            # চ্যানেলের শেষের ২৫টি মেসেজ স্ক্যান করবে
                             async for msg in channel.history(limit=25):
                                 if msg.author.id == instance.user.id:
                                     if is_scam_msg(msg, check_links=False):
@@ -260,7 +248,7 @@ class AccountSession:
                             await human_delay(1.5, 2.5)
                         except discord.HTTPException:
                             continue
-        except Exception as e:
+        except Exception:
             pass
             
         self.log.info("[BACKFILL] Historical cleanup scan completed smoothly for DMs and All Channels.")
@@ -344,7 +332,7 @@ class AccountSession:
                 await asyncio.sleep(5)
 
 
-# ── API Integration (Called by server.py) ──────────────────────────────────────
+# ── API Integration ────────────────────────────────────────────────────────────
 active_bots = {}  
 
 async def start_async_bots(tokens: list[str], username: str = None):
