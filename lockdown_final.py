@@ -39,57 +39,82 @@ MARKDOWN_LINK_RE = re.compile(r'\[.*?\]\(https?://\S+\)')
 
 # ── 🚨 The Master Filter Logic (Normal Guard) ──────────────────────────────────
 def is_scam_msg(message: discord.Message, check_links: bool = True) -> bool:
-    """Hacker-er shob pattern dhwongsho korar master logic"""
+    """হ্যাকারের সব প্যাটার্ন ধ্বংস করার মাস্টার লজিক (ফলস-পজিティブ ফ্রি)"""
     
     if not message or (not message.content and not message.attachments and not message.embeds):
         return False
 
     content_lower = message.content.lower().strip()
     original_content = message.content.strip()
-    has_attachment = len(message.attachments) > 0 or len(message.embeds) > 0
+    total_pics = len(message.attachments)
     
-    # Mention check
+    # মেনশন ও টেক্সট চেক
     has_mention = len(message.mentions) > 0 or "@" in content_lower
+    has_bro = bool(re.search(r'\bbro\b', content_lower))
+    has_any_text = len(content_lower) > 0
 
-    # 🟢 Rule 0: Secret bypass key (Secret Password)
+    # 🟢 রুল ০: সিক্রেট বাইপাস কী (Secret Password)
     if content_lower == 'msc':
         return False
 
-    # ── 🔴 Shudhumatno Chobir Rules (যা লাইভ ও ব্যাকফিল উভয় ক্ষেত্রেই চলবে) ──
-    total_pics = len(message.attachments)
-    has_bro = bool(re.search(r'\bbro\b', content_lower))
-
-    # 🌟 [NEW FIX] Joto chobi-ei dik na keno (at least 1ta), shathe jodi 'bro' ba 'mention' thakle remove hbe
-    if (total_pics >= 1) and (has_bro or has_mention):
-        return True
-
-    # গ) Shudinisto namer chobi (IMG_1234 ba Untitled) + shathe mention thaklei delete
-    has_scam_pattern_image = False
-    for a in message.attachments:
-        if a.filename:
-            fname_lower = a.filename.lower()
-            if "untitled" in fname_lower or bool(re.search(r'img[-_]?\d+', fname_lower)):
-                has_scam_pattern_image = True
-                break
-
-    if has_scam_pattern_image and has_mention:
-        return True
-
-    # ঘ) 'Untitled' attack (rename na kora 2ti ba tar beshi screenshot)
-    untitled_images = sum(1 for a in message.attachments if a.filename and "untitled" in a.filename.lower())
-    if untitled_images >= 2:
-        return True
-
-    # ঙ) Hacker-er image blast + random promo code (jemon: aJyReBRd)
-    if len(message.attachments) >= 3:
-        words = original_content.split()
-        if len(words) == 0:
+    # ── 🔴 শুধুমাত্র ছবির রুলস (যা লাইভ ও ব্যাকফিল উভয় ক্ষেত্রেই চলবে) ──
+    if total_pics >= 1:
+        # ক) জাস্ট আপনার নতুন নিয়ম: যেকোনো সংখ্যক ছবির সাথে 'bro' বা '@mention' থাকলেই ডিলিট
+        if has_bro or has_mention:
             return True
-            
-        for w in words:
-            w_clean = re.sub(r'[^a-zA-Z]', '', w)
-            if 6 <= len(w_clean) <= 15 and not w_clean.islower() and not w_clean.isupper():
+
+        # খ) সুনির্দিষ্ট নামের ছবি (IMG_1234 বা Untitled) + সাথে যেকোনো টেক্সট/কোড থাকলেই ডিলিট
+        has_scam_pattern_image = False
+        for a in message.attachments:
+            if a.filename:
+                fname_lower = a.filename.lower()
+                if "untitled" in fname_lower or bool(re.search(r'img[-_]?\d+', fname_lower)):
+                    has_scam_pattern_image = True
+                    break
+        if has_scam_pattern_image and has_any_text:
+            return True
+
+        # গ) 'Untitled' অ্যাটাক (রিনেম না করা ২টি বা তার বেশি স্ক্রিনশট একসাথে দিলে সরাসরি ডিলিট)
+        untitled_images = sum(1 for a in message.attachments if a.filename and "untitled" in a.filename.lower())
+        if untitled_images >= 2:
+            return True
+
+        # ঘ) হ্যাকারের ইমেজ ব্লাস্ট (৩ বা তার বেশি ছবি) + র‍্যান্ডম প্রমো কোড (যেমন: aJyReBRd)
+        if total_pics >= 3 and has_any_text:
+            words = original_content.split()
+            for w in words:
+                w_clean = re.sub(r'[^a-zA-Z]', '', w)
+                # কোডটি যদি ৬-১৫ অক্ষরের হয় এবং মিক্সড কেস (Mixed Case) হয়, তবেই স্ক্যাম
+                if 6 <= len(w_clean) <= 15 and not w_clean.islower() and not w_clean.isupper():
+                    return True
+
+
+    # ── 🔴 লিংকের রুলস (ব্যাকফিলের অনুরোধে এটি শুধু লাইভ প্রোটেকশনে চলবে) ──
+    if check_links:
+        # 🟢 লিংক সেফটি বাইপাস: মেসেজে যদি 'safe' অথবা 'sf' লেখা থাকে, তবে লিংকটি ডিলিট হবে না
+        is_user_safe_link = bool(re.search(r'\b(safe|sf)\b', content_lower))
+        if is_user_safe_link:
+            return False
+
+        # ডিসকورد ইনভাইট লিংক ব্লক
+        if bool(re.search(r'(discord\.gg/|discord\.com/invite/|discordapp\.com/invite/)', content_lower)):
+            return True
+
+        # ক্রিপ্টো কি-ওয়ার্ড + লিংক
+        has_link = bool(LINK_RE.search(content_lower)) or bool(MARKDOWN_LINK_RE.search(content_lower))
+        for word in SCAM_KEYWORDS:
+            if re.search(r'\b' + re.escape(word) + r'\b', content_lower):
                 return True
+            for embed in message.embeds:
+                if embed.description and re.search(r'\b' + re.escape(word) + r'\b', embed.description.lower()): 
+                    return True
+                if embed.title and re.search(r'\b' + re.escape(word) + r'\b', embed.title.lower()): 
+                    return True
+                    
+        if has_link and total_pics >= 1:
+            return True
+
+    return False
 
 
     # ── 🔴 Link-er Rules (Backfill-e eti shudhu live protection-e cholbe) ──
