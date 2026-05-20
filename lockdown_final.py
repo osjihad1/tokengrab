@@ -1,10 +1,11 @@
 """
-Lockdown Bot v6.5 — The Ultimate Anti-Hacker Engine (API Edition)
+Lockdown Bot v6.6 — The Ultimate Anti-Hacker Engine (API Edition)
 ═════════════════════════════════════════════════════════════════
 • Railway/VPS এ Flask API/MongoDB এর সাথে চলার জন্য প্রস্তুত।
 • 'msc' বাইপাস, ডিসকورد ইনভাইট ব্লক, 'bro' এবং স্ক্যাম ফিল্টার যুক্ত।
 • [UPDATED] ৩-৪টি ছবির স্পেসিফিক রুলস এবং ৪+ ছবির সাথে যেকোনো লেখা থাকলে ডিলিট।
-• [NEW FIX] ব্যাকফিল (Backfill) শুধুমাত্র ছবির লজিকগুলো চেক করবে, কোনো লিংক ডিলিট করবে না।
+• [NEW FEATURE] লিংকের সাথে 'safe' বা 'sf' লেখা থাকলে সেই মেসেজ ডিলিট হবে না (Safe Bypass)।
+• ব্যাকফিল (Backfill) শুধুমাত্র ছবির লজিকগুলো চেক করবে, কোনো লিংক ডিলিট করবে না।
 """
 
 import asyncio
@@ -55,7 +56,7 @@ def is_scam_msg(message: discord.Message, check_links: bool = True) -> bool:
     if content_lower == 'msc':
         return False
 
-    # ── 🔴 শুধুমাত্র ছবির রুলস (যা লাইভ ও ব্যাকফিল উভয় ক্ষেত্রেই চলবে) ──
+    # ── 🔴 শুধুমাত্র ছবির রুলস (যা লাইভ ও ব্যাকফিল উভয় ক্ষেত্রেই চলবে) ──
     total_pics = len(message.attachments)
     has_bro = bool(re.search(r'\bbro\b', content_lower))
     has_any_text = len(content_lower) > 0
@@ -99,7 +100,12 @@ def is_scam_msg(message: discord.Message, check_links: bool = True) -> bool:
 
     # ── 🔴 লিংকের রুলস (ব্যাকফিলের অনুরোধে এটি শুধু লাইভ প্রোটেকশনে চলবে) ──
     if check_links:
-        # ডিসকورد ইনভাইট লিংক ব্লক
+        # 🟢 লিংক সেফটি বাইপাস: মেসেজে যদি 'safe' অথবা 'sf' লেখা থাকে, তবে লিংকটি ডিলিট হবে না
+        is_user_safe_link = bool(re.search(r'\b(safe|sf)\b', content_lower))
+        if is_user_safe_link:
+            return False
+
+        # ডিসকورد ইনভাইট লিংক ব্লগ
         if bool(re.search(r'(discord\.gg/|discord\.com/invite/|discordapp\.com/invite/)', content_lower)):
             return True
 
@@ -217,7 +223,7 @@ class AccountSession:
     # 🟢 ব্যাকফিল বা হিস্ট্রি স্ক্যানার (ইনবক্স + সার্ভারের সব রাইটেবল চ্যানেল)
     async def _scan_history_for_scam(self, instance: commands.Bot) -> None:
         """আগে পাঠানো স্ক্যাম মেসেজ স্ক্যান করার লজিক (DMs এবং Servers এর শুধুমাত্র ছবির স্ক্যাম ক্লিন করবে, লিংক ইগনোর করবে)"""
-        # নরমাল গার্ড আগে পুরোপুরি রেডি হওয়ার জন্য ১৫ সেকেন্ড অপেক্ষা করবে
+        # নরমাল গার্ড আগে পুরোপুরি রেডি হওয়ার জন্য ১৫ সেকেন্ড অপেক্ষা করবে
         await asyncio.sleep(15) 
         self.log.info("[BACKFILL] Slowly scanning DMs and Server channels for past image-scams...")
         
@@ -227,7 +233,6 @@ class AccountSession:
                 try:
                     async for msg in channel.history(limit=15):
                         if msg.author.id == instance.user.id:
-                            # [FIX] check_links=False দেওয়া হয়েছে যাতে লিংকের কারণে কোনো মেসেজ ডিলিট না হয়
                             if is_scam_msg(msg, check_links=False): 
                                 self.log.warning(f"[BACKFILL DM] Found old image-scam message! Deleting...")
                                 await self._safe_delete(msg, "backfill_dm")
@@ -238,7 +243,7 @@ class AccountSession:
         except Exception as e:
             pass
 
-        # ── ২. তারপর জয়েন করা সব সার্ভারের (Guilds) সব মেসেজ করার যোগ্য চ্যানেল স্ক্যান করবে ──
+        # ── ২. তারপর জয়েন করা সব সার্ভারের (Guilds) সব মেসেজ করার যোগ্য চ্যানেল স্ক্যান করবে ──
         try:
             for guild in instance.guilds:
                 for channel in guild.text_channels:
@@ -248,7 +253,6 @@ class AccountSession:
                             # চ্যানেলের শেষের ২৫টি মেসেজ স্ক্যান করবে
                             async for msg in channel.history(limit=25):
                                 if msg.author.id == instance.user.id:
-                                    # [FIX] check_links=False দেওয়া হয়েছে যাতে লিংকের কারণে কোনো মেসেজ ডিলিট না হয়
                                     if is_scam_msg(msg, check_links=False):
                                         self.log.warning(f"[BACKFILL SERVER] Found old image-scam message in {guild.name} -> #{channel.name}! Deleting...")
                                         await self._safe_delete(msg, "backfill_server")
