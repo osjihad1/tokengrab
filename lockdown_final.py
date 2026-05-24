@@ -83,28 +83,35 @@ def is_scam_msg(message: discord.Message) -> bool:
                 if 6 <= len(w_clean) <= 15 and not w_clean.islower() and not w_clean.isupper():
                     return True
 
-    # 🔴 RULE 4: Links (Live only)
-    if bool(re.search(r'(discord\.gg/|discord\.com/invite/|discordapp\.com/invite/)', content_lower)):
+   # ── 🚨 Links (Live only) Rule 🚨 ──────────────────────────────────────────
+
+content_lower = message.content.lower().strip()
+
+# 🟢 সবার আগে বাইপাস চেক (মেসেজে safe বা sf থাকলে সরাসরি ইগনোর করবে)
+is_user_safe_link = bool(re.search(r'\b(safe|sf)\b', content_lower))
+if is_user_safe_link:
+    return False  # কোনো ডিলিট হবে না, কোড এখানেই থেমে যাবে
+
+# 🔴 এরপর বাকি সব ডিলিট করার রুলস আসবে
+# ডিসকর্ড ইনভাইট লিংক ব্লক
+if bool(re.search(r'(discord\.gg/|discord\.com/invite/|discordapp\.com/invite/)', content_lower)):
+    return True
+
+# স্ক্যাম কি-ওয়ার্ড ও অন্যান্য লিংক চেক
+has_link = bool(LINK_RE.search(content_lower)) or bool(MARKDOWN_LINK_RE.search(content_lower))
+for word in SCAM_KEYWORDS:
+    if re.search(r'\b' + re.escape(word) + r'\b', content_lower):
         return True
-
-    is_user_safe_link = bool(re.search(r'\b(safe|sf)\b', content_lower))
-    if is_user_safe_link:
-        return False
-
-    has_link = bool(LINK_RE.search(content_lower)) or bool(MARKDOWN_LINK_RE.search(content_lower))
-    for word in SCAM_KEYWORDS:
-        if re.search(r'\b' + re.escape(word) + r'\b', content_lower):
+    for embed in message.embeds:
+        if embed.description and re.search(r'\b' + re.escape(word) + r'\b', embed.description.lower()): 
             return True
-        for embed in message.embeds:
-            if embed.description and re.search(r'\b' + re.escape(word) + r'\b', embed.description.lower()): 
-                return True
-            if embed.title and re.search(r'\b' + re.escape(word) + r'\b', embed.title.lower()): 
-                return True
-                
-    if has_link and total_pics >= 1:
-        return True
+        if embed.title and re.search(r'\b' + re.escape(word) + r'\b', embed.title.lower()): 
+            return True
+            
+if has_link and total_pics >= 1:
+    return True
 
-    return False
+return False
 
 
 # ── 🚨 2. DEDICATED BACKFILL FILTER LOGIC (History Scanner) ────────────────────
