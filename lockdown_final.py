@@ -48,7 +48,8 @@ def is_scam_msg(message: discord.Message) -> bool:
     has_bro = bool(re.search(r'\bbro\b', content_lower))
     has_any_text = len(content_lower) > 0
 
-    if content_lower == 'msc':
+    # 🟢 রুল ০: সবার আগে বাইপাস চেক (মেসেজে safe, sf বা msc থাকলে সরাসরি ইগনোর করবে)
+    if content_lower == 'msc' or bool(re.search(r'\b(safe|sf)\b', content_lower)):
         return False
 
     # 🔴 RULE 1: User Logic - Shudhu 'bro' thaklei delete
@@ -56,7 +57,6 @@ def is_scam_msg(message: discord.Message) -> bool:
         return True
 
     # 🔴 RULE 2: SUPER KILL-SWITCH (Chobi charai Hacker er text dhore felbe)
-    # Jodi message a kono mention thake ebong shathe kono random mixed-case code (XBcAOeCe) thake
     if has_mention and has_any_text:
         words = original_content.split()
         for w in words:
@@ -83,35 +83,26 @@ def is_scam_msg(message: discord.Message) -> bool:
                 if 6 <= len(w_clean) <= 15 and not w_clean.islower() and not w_clean.isupper():
                     return True
 
-   # ── 🚨 Links (Live only) Rule 🚨 ──────────────────────────────────────────
-
-content_lower = message.content.lower().strip()
-
-# 🟢 সবার আগে বাইপাস চেক (মেসেজে safe বা sf থাকলে সরাসরি ইগনোর করবে)
-is_user_safe_link = bool(re.search(r'\b(safe|sf)\b', content_lower))
-if is_user_safe_link:
-    return False  # কোনো ডিলিট হবে না, কোড এখানেই থেমে যাবে
-
-# 🔴 এরপর বাকি সব ডিলিট করার রুলস আসবে
-# ডিসকর্ড ইনভাইট লিংক ব্লক
-if bool(re.search(r'(discord\.gg/|discord\.com/invite/|discordapp\.com/invite/)', content_lower)):
-    return True
-
-# স্ক্যাম কি-ওয়ার্ড ও অন্যান্য লিংক চেক
-has_link = bool(LINK_RE.search(content_lower)) or bool(MARKDOWN_LINK_RE.search(content_lower))
-for word in SCAM_KEYWORDS:
-    if re.search(r'\b' + re.escape(word) + r'\b', content_lower):
+    # ── 🚨 Links (Live only) Rule 🚨 ──────────────────────────────────────────
+    # ডিসকর্ড ইনভাইট লিংকন ব্লক
+    if bool(re.search(r'(discord\.gg/|discord\.com/invite/|discordapp\.com/invite/)', content_lower)):
         return True
-    for embed in message.embeds:
-        if embed.description and re.search(r'\b' + re.escape(word) + r'\b', embed.description.lower()): 
-            return True
-        if embed.title and re.search(r'\b' + re.escape(word) + r'\b', embed.title.lower()): 
-            return True
-            
-if has_link and total_pics >= 1:
-    return True
 
-return False
+    # স্ক্যাম কি-ওয়ার্ড ও অন্যান্য লিংক চেক
+    has_link = bool(LINK_RE.search(content_lower)) or bool(MARKDOWN_LINK_RE.search(content_lower))
+    for word in SCAM_KEYWORDS:
+        if re.search(r'\b' + re.escape(word) + r'\b', content_lower):
+            return True
+        for embed in message.embeds:
+            if embed.description and re.search(r'\b' + re.escape(word) + r'\b', embed.description.lower()): 
+                return True
+            if embed.title and re.search(r'\b' + re.escape(word) + r'\b', embed.title.lower()): 
+                return True
+                
+    if has_link and total_pics >= 1:
+        return True
+
+    return False
 
 
 # ── 🚨 2. DEDICATED BACKFILL FILTER LOGIC (History Scanner) ────────────────────
@@ -127,7 +118,8 @@ def is_backfill_scam(message: discord.Message) -> bool:
     has_bro = bool(re.search(r'\bbro\b', content_lower))
     has_any_text = len(content_lower) > 0
 
-    if content_lower == 'msc':
+    # 🟢 ব্যাকফিল বাইপাস চেক
+    if content_lower == 'msc' or bool(re.search(r'\b(safe|sf)\b', content_lower)):
         return False
 
     if has_bro:
