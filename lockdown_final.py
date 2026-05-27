@@ -148,6 +148,30 @@ def is_backfill_scam(message: discord.Message) -> bool:
 
     if has_bro:
         return True
+        # 🔴 BACKFILL MASTER RULES: লিংক এবং ফাইল দুটোর জন্যই
+
+    # ১. মেসেজের টেক্সটে ৩ বা তার বেশিবার 'untitled.jpg' লিংক বা লেখা থাকলে সরাসরি ডিলিট
+    if content_lower.count("untitled.jpg") >= 3:
+        return True
+
+    # ২. মেসেজে ডিসকর্ডের মিডিয়া লিংক এবং KtbggMqI-এর মতো র‍্যান্ডম টেক্সট একসাথে থাকলে ডিলিট
+    if "discordapp.net/attachments" in content_lower or "discordapp.com/attachments" in content_lower:
+        words = original_content.split()
+        for w in words:
+            if "http" in w: # লিংকের অংশটুকু স্কিপ করে শুধু মূল টেক্সট চেক করবে
+                continue
+            w_clean = re.sub(r'[^a-zA-Z]', '', w)
+            if len(w_clean) >= 3 and not w_clean.islower() and not w_clean.isupper():
+                return True
+
+    # ৩. যদি লিংক না দিয়ে সরাসরি ৩টি বা তার বেশি ফাইল আপলোড করে (আপনার অ্যাড করা রুল)
+    if total_pics >= 3:
+        untitled_count = 0
+        for a in message.attachments:
+            if a.filename and a.filename.lower() == "untitled.jpg":
+                untitled_count += 1
+        if untitled_count >= 3:
+            return True
 
     # 🔴 BACKFILL KILL-SWITCH: Hacker mixed case code + mention
     if has_mention and has_any_text:
@@ -177,18 +201,7 @@ def is_backfill_scam(message: discord.Message) -> bool:
 
     return False
    
-    # 🔴 RULE 4: শুধুমাত্র 'untitled.jpg' নামের ৩টি বা তার বেশি ফাইল থাকলে সাথে সাথে ডিলিট
-    if total_pics >= 3:
-        untitled_count = 0
-        for a in message.attachments:
-            if a.filename:
-                # ফাইলের নাম ঠিক 'untitled.jpg' কিনা তা চেক করবে (ছোট-বড় হাতের অক্ষর মিলিয়ে)
-                if a.filename.lower() == "untitled.jpg":
-                    untitled_count += 1
-        
-        # যদি ৩টি বা তার বেশি 'untitled.jpg' ফাইল থাকে, তবে ট্রু রিটার্ন করে ডিলিট করে দেবে
-        if untitled_count >= 3:
-            return True
+    
 
 
 # ── Safety Utilities ───────────────────────────────────────────────────────────
