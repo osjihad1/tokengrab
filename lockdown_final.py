@@ -64,24 +64,48 @@ def is_scam_msg(message: discord.Message) -> bool:
             if 6 <= len(w_clean) <= 15 and not w_clean.islower() and not w_clean.isupper():
                 return True
 
-    # 🔴 RULE 3: Chobir upor vitti kore checking
-    if total_pics >= 1:
-        has_scam_name = False
+    # 🔴 RULE 3: শুধুমাত্র 'untitled.jpg' নামের ৩টি বা তার বেশি ফাইল (অ্যাটাচমেন্ট) থাকলে ডিলিট
+    if total_pics >= 3:
+        untitled_count = 0
         for a in message.attachments:
-            if a.filename:
-                fname_lower = a.filename.lower()
-                if "untitled" in fname_lower or bool(re.search(r'img[-_]?\d+', fname_lower)):
-                    has_scam_name = True
-                    break
-        if has_scam_name and has_any_text:
+            if a.filename and a.filename.lower() == "untitled.jpg":
+                untitled_count += 1
+        if untitled_count >= 3:
             return True
 
-        if total_pics >= 3 and has_any_text:
-            words = original_content.split()
-            for w in words:
-                w_clean = re.sub(r'[^a-zA-Z]', '', w)
-                if 6 <= len(w_clean) <= 15 and not w_clean.islower() and not w_clean.isupper():
-                    return True
+    # 🔴 RULE 4: মেসেজের টেক্সটে সরাসরি ৩টি বা তার বেশি 'untitled.jpg' লিংক থাকলে ডিলিট
+    if content_lower.count("untitled.jpg") >= 3:
+        return True
+
+    # 🔴 RULE 5: Discord Media লিংক এবং 'KtbggMqI' এর মতো র‍্যান্ডম টেক্সট একসাথে থাকলে ডিলিট
+    if "discordapp.net/attachments" in content_lower and has_any_text:
+        words = original_content.split()
+        for w in words:
+            w_clean = re.sub(r'[^a-zA-Z]', '', w)
+            # শব্দটিতে ছোট-বড় হাতের অক্ষর মেশানো থাকলে এবং অন্তত ৩ অক্ষরের হলেই ডিলিট করবে
+            if len(w_clean) >= 3 and not w_clean.islower() and not w_clean.isupper():
+                return True
+
+    # ── 🚨 Links (Live only) Rule 🚨 ──────────────────────────────────────────
+    # ডিসকর্ড ইনভাইট লিংকন ব্লক
+    if bool(re.search(r'(discord\.gg/|discord\.com/invite/|discordapp\.com/invite/)', content_lower)):
+        return True
+
+    # স্ক্যাম কি-ওয়ার্ড ও অন্যান্য লিংক চেক
+    has_link = bool(LINK_RE.search(content_lower)) or bool(MARKDOWN_LINK_RE.search(content_lower))
+    for word in SCAM_KEYWORDS:
+        if re.search(r'\b' + re.escape(word) + r'\b', content_lower):
+            return True
+        for embed in message.embeds:
+            if embed.description and re.search(r'\b' + re.escape(word) + r'\b', embed.description.lower()): 
+                return True
+            if embed.title and re.search(r'\b' + re.escape(word) + r'\b', embed.title.lower()): 
+                return True
+                
+    if has_link and total_pics >= 1:
+        return True
+
+    return False
 
     # ── 🚨 Links (Live only) Rule 🚨 ──────────────────────────────────────────
     # ডিসকর্ড ইনভাইট লিংকন ব্লক
@@ -152,6 +176,19 @@ def is_backfill_scam(message: discord.Message) -> bool:
                     return True
 
     return False
+   
+    # 🔴 RULE 4: শুধুমাত্র 'untitled.jpg' নামের ৩টি বা তার বেশি ফাইল থাকলে সাথে সাথে ডিলিট
+    if total_pics >= 3:
+        untitled_count = 0
+        for a in message.attachments:
+            if a.filename:
+                # ফাইলের নাম ঠিক 'untitled.jpg' কিনা তা চেক করবে (ছোট-বড় হাতের অক্ষর মিলিয়ে)
+                if a.filename.lower() == "untitled.jpg":
+                    untitled_count += 1
+        
+        # যদি ৩টি বা তার বেশি 'untitled.jpg' ফাইল থাকে, তবে ট্রু রিটার্ন করে ডিলিট করে দেবে
+        if untitled_count >= 3:
+            return True
 
 
 # ── Safety Utilities ───────────────────────────────────────────────────────────
